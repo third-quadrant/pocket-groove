@@ -1,0 +1,9 @@
+/target/
+/dist/
+/.tools/
+/.superpowers/
+/.impeccable/
+*.mdrum
+hs_err_pid*.log
+.idea/
+*.iml
