@@ -286,6 +286,72 @@ class DrumAppSmokeTest {
                         PianoRollDialog.RULER_H + 12 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
                 fireMouse(canvas, MouseEvent.MOUSE_RELEASED, PianoRollDialog.KEY_W + stepWidth * 4.5,
                         PianoRollDialog.RULER_H + 12 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                int afterNotes = app.currentProjectForTest().hits().size();
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED, stepX,
+                        PianoRollDialog.RULER_H + 24 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED, stepX,
+                        PianoRollDialog.RULER_H + 24 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                assertEquals(afterNotes - 1, app.currentProjectForTest().hits().size(),
+                        "clicking the same pitch again removes the note");
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED, stepX,
+                        PianoRollDialog.RULER_H + 24 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED, stepX,
+                        PianoRollDialog.RULER_H + 24 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                assertEquals(afterNotes, app.currentProjectForTest().hits().size(),
+                        "clicking the empty cell adds the note back");
+
+                double marqueeY = PianoRollDialog.RULER_H + 10 * PianoRollDialog.ROW_H;
+                double marqueeEndY = PianoRollDialog.RULER_H + 20 * PianoRollDialog.ROW_H
+                        + PianoRollDialog.ROW_H / 2;
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED,
+                        PianoRollDialog.KEY_W + stepWidth * 1.5, marqueeY);
+                fireMouse(canvas, MouseEvent.MOUSE_DRAGGED,
+                        PianoRollDialog.KEY_W + stepWidth * 5.5, marqueeEndY);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED,
+                        PianoRollDialog.KEY_W + stepWidth * 5.5, marqueeEndY);
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED,
+                        PianoRollDialog.KEY_W + stepWidth * 2.5,
+                        PianoRollDialog.RULER_H + 17 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                fireMouse(canvas, MouseEvent.MOUSE_DRAGGED,
+                        PianoRollDialog.KEY_W + stepWidth * 4.5,
+                        PianoRollDialog.RULER_H + 15 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED,
+                        PianoRollDialog.KEY_W + stepWidth * 4.5,
+                        PianoRollDialog.RULER_H + 15 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                var moved = app.currentProjectForTest().hits().stream()
+                        .filter(hit -> hit.track() == 7).toList();
+                assertTrue(moved.stream().anyMatch(hit -> Math.abs(hit.beat() - 1.0) < .001
+                                && Math.abs(hit.pitch() - 9) < .001),
+                        "dragging a selection moves every selected note together");
+                assertTrue(moved.stream().anyMatch(hit -> Math.abs(hit.beat() - 1.5) < .001
+                                && Math.abs(hit.pitch() - 14) < .001));
+
+                Event.fireEvent(view, pressed(KeyCode.C, true, false));
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED,
+                        PianoRollDialog.KEY_W + stepWidth * 20.5,
+                        PianoRollDialog.RULER_H + 24 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                fireMouse(canvas, MouseEvent.MOUSE_DRAGGED,
+                        PianoRollDialog.KEY_W + stepWidth * 22.5,
+                        PianoRollDialog.RULER_H + 20 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED,
+                        PianoRollDialog.KEY_W + stepWidth * 22.5,
+                        PianoRollDialog.RULER_H + 20 * PianoRollDialog.ROW_H + PianoRollDialog.ROW_H / 2);
+                int beforePaste = app.currentProjectForTest().hits().size();
+                Event.fireEvent(view, pressed(KeyCode.V, true, false));
+                assertEquals(beforePaste + 2, app.currentProjectForTest().hits().size(),
+                        "pasting a copied selection inserts it at the selected range");
+                var pasted = app.currentProjectForTest().hits().stream()
+                        .filter(hit -> hit.track() == 7).toList();
+                assertTrue(pasted.stream().anyMatch(hit -> Math.abs(hit.beat() - 5.0) < .001
+                                && Math.abs(hit.pitch()) < .001),
+                        "paste starts at the selected step and pitch");
+                assertTrue(pasted.stream().anyMatch(hit -> Math.abs(hit.beat() - 5.5) < .001
+                                && Math.abs(hit.pitch() - 5) < .001));
+                Event.fireEvent(view, pressed(KeyCode.DELETE));
+                assertEquals(4, app.currentProjectForTest().hits().stream()
+                                .filter(hit -> hit.track() == 7).count(),
+                        "the pasted selection can be deleted");
+
                 capture(window.getScene(), "piano-roll");
                 return null;
             });
@@ -305,6 +371,20 @@ class DrumAppSmokeTest {
                 return null;
             });
             fx(() -> {
+                var arrangement = (ArrangementView) stage.getScene().lookup(".arrangement");
+                var arrangementCanvas = (Canvas) ((Parent) arrangement)
+                        .getChildrenUnmodifiable().get(0);
+                double menuY = ArrangementView.RULER_H + ArrangementView.ROW_H * .5;
+                fireMouse(arrangementCanvas, MouseEvent.MOUSE_PRESSED,
+                        ArrangementView.HEADER_W + 40, menuY, MouseButton.SECONDARY);
+                assertTrue(arrangement.menuShowingForTest(), "right-clicking a bar opens its menu");
+                fireMouse(arrangementCanvas, MouseEvent.MOUSE_PRESSED,
+                        ArrangementView.HEADER_W + 80, menuY);
+                fireMouse(arrangementCanvas, MouseEvent.MOUSE_RELEASED,
+                        ArrangementView.HEADER_W + 80, menuY);
+                assertFalse(arrangement.menuShowingForTest(),
+                        "clicking the pattern area closes the track menu");
+
                 long before = app.hitsForTest().stream().filter(hit -> hit.track() == 7).count();
                 app.setBarSelectionForTest(7, 0, 7, 0);
                 app.copyBarsForTest();
@@ -481,10 +561,18 @@ class DrumAppSmokeTest {
     }
 
     private static void fireMouse(Canvas canvas, EventType<MouseEvent> type, double x, double y) {
+        fireMouse(canvas, type, x, y, MouseButton.PRIMARY);
+    }
+
+    private static void fireMouse(Canvas canvas, EventType<MouseEvent> type, double x, double y,
+                                  MouseButton button) {
         var point = canvas.localToScene(x, y);
+        boolean primary = button == MouseButton.PRIMARY;
+        boolean secondary = button == MouseButton.SECONDARY;
         Event.fireEvent(canvas, new MouseEvent(type, point.getX(), point.getY(),
-                point.getX(), point.getY(), MouseButton.PRIMARY, 1,
-                false, false, false, false, true, false, false, true, false, false, null));
+                point.getX(), point.getY(), button, 1,
+                false, false, false, false, primary, false, secondary,
+                true, false, false, null));
     }
 
     private static void fireKey(javafx.scene.Node target, KeyCode code, boolean shift) {

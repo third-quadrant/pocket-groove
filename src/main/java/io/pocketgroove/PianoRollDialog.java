@@ -43,7 +43,8 @@ final class PianoRollDialog {
     static Stage show(Window owner, Beat.Track track, int trackIndex, List<Beat.Hit> initial,
                       double loopBeats, int projectPitch,
                       Consumer<List<Beat.Hit>> onChange,
-                      BiConsumer<Integer, Boolean> onSettings) {
+                      BiConsumer<Integer, Boolean> onSettings,
+                      BiConsumer<Double, Double> onPreview) {
         var view = new PianoRollView(trackIndex, initial, loopBeats,
                 track.baseMidiNote() + projectPitch + (int) Math.round(track.pitch()));
         var lengthBox = new ComboBox<Double>();
@@ -145,6 +146,7 @@ final class PianoRollDialog {
             onChange.accept(updated);
             view.setData(updated);
         });
+        view.setOnPreview(onPreview);
 
         var root = new BorderPane(view);
         root.setTop(toolbar);
@@ -183,13 +185,33 @@ final class PianoRollDialog {
         private double stepWidth = 24;
         private int noteBase;
         private int baseMidiNote;
-        private Selected selected;
-        private Drag drag;
+        private final List<Note> selection = new ArrayList<>();
+        private Mode mode = Mode.NONE;
+        private Note pressNote;
+        private int pressStep = -1;
+        private int pressPitch = Integer.MIN_VALUE;
+        private double pressX;
+        private double pressY;
+        private List<Beat.Hit> dragFull = List.of();
+        private List<Beat.Hit> dragNotes = List.of();
+        private List<Note> dragSelection = List.of();
+        private Beat.Hit resizeHit;
+        private int rangeStep0 = -1;
+        private int rangeStep1 = -1;
+        private int rangePitch0 = Integer.MIN_VALUE;
+        private int rangePitch1 = Integer.MIN_VALUE;
+        private boolean rangeSet;
+        private List<Clip> clipboard = List.of();
+        private double clipboardPitch = 0;
+        private String notice;
+        private BiConsumer<Double, Double> onPreview = (pitch, velocity) -> {};
         private int hoverStep = -1;
         private int hoverPitch = Integer.MIN_VALUE;
 
-        private record Selected(int step, double pitch) {}
-        private record Drag(Selected origin, Beat.Hit hit, boolean resize, int startX) {}
+        private enum Mode { NONE, MARQUEE, MOVE, RESIZE }
+
+        private record Note(int step, double pitch) {}
+        private record Clip(int step, double pitch, double velocity, double length) {}
 
         PianoRollView(int trackIndex, List<Beat.Hit> initial,
                       double loopBeats, int noteBase) {
@@ -215,7 +237,7 @@ final class PianoRollDialog {
             });
             canvas.setOnMousePressed(this::mousePressed);
             canvas.setOnMouseDragged(this::mouseDragged);
-            canvas.setOnMouseReleased(e -> drag = null);
+            canvas.setOnMouseReleased(this::mouseReleased);
             canvas.setOnMouseClicked(e -> {
                 if (e.getButton() == MouseButton.SECONDARY) {
                     var hit = hitAt(e.getX(), e.getY());
@@ -229,6 +251,17 @@ final class PianoRollDialog {
                 if (e.getCode() == KeyCode.DELETE || e.getCode() == KeyCode.BACK_SPACE) {
                     deleteSelected();
                     e.consume();
+                } else if (e.isControlDown() && e.getCode() == KeyCode.C) {
+                    copySelection();
+                    e.consume();
+                } else if (e.isControlDown() && e.getCode() == KeyCode.V) {
+                    pasteSelection();
+                    e.consume();
+                } else if (e.getCode() == KeyCode.ESCAPE) {
+                    selection.clear();
+                    rangeSet = false;
+                    draw();
+                    e.consume();
                 }
             });
             widthProperty().addListener((o, a, b) -> requestLayout());
@@ -239,10 +272,13 @@ final class PianoRollDialog {
             onChange = listener == null ? ignored -> {} : listener;
         }
 
+        void setOnPreview(BiConsumer<Double, Double> listener) {
+            onPreview = listener == null ? (pitch, velocity) -> {} : listener;
+        }
+
         void setData(List<Beat.Hit> updated) {
             hits = List.copyOf(updated);
-            if (selected != null && Pattern.notes(hits, trackIndex, selected.step()).stream()
-                    .noneMatch(hit -> close(hit.pitch(), selected.pitch()))) selected = null;
+            selection.removeIf(note -> !hasNote(note.step(), note.pitch()));
             draw();
         }
 
@@ -258,11 +294,97 @@ final class PianoRollDialog {
         }
 
         void deleteSelected() {
-            if (selected == null) return;
-            hits = Pattern.removeNote(hits, trackIndex, selected.step(), selected.pitch());
-            selected = null;
+            if (selection.isEmpty()) return;
+            var updated = hits;
+            for (var note : List.copyOf(selection)) {
+                updated = Pattern.removeNote(updated, trackIndex, note.step(), note.pitch());
+            }
+            hits = updated;
+            selection.clear();
+            notice = "음표를 삭제했습니다.";
             onChange.accept(hits);
             draw();
+        }
+
+        private void copySelection() {
+            if (selection.isEmpty()) {
+                notice = "복사할 음표를 먼저 선택하세요.";
+                draw();
+                return;
+            }
+            double minPitch = selection.stream().mapToDouble(Note::pitch).min().orElse(0);
+            int minStep = selection.stream().mapToInt(Note::step).min().orElse(0);
+            var copied = new ArrayList<Clip>();
+            for (var hit : hits) {
+                if (hit.track() != trackIndex || !selected(hit)) continue;
+                copied.add(new Clip(stepOf(hit.beat()) - minStep, hit.pitch() - minPitch,
+                        hit.velocity(), hit.length()));
+            }
+            clipboard = List.copyOf(copied);
+            clipboardPitch = minPitch;
+            notice = copied.size() + "개 음표를 복사했습니다.";
+            draw();
+        }
+
+        private void pasteSelection() {
+            if (clipboard.isEmpty()) {
+                notice = "복사한 음표가 없습니다.";
+                draw();
+                return;
+            }
+            int targetStep;
+            double targetPitch;
+            if (rangeSet) {
+                targetStep = Math.min(rangeStep0, rangeStep1);
+                targetPitch = Math.min(rangePitch0, rangePitch1);
+            } else if (!selection.isEmpty()) {
+                targetStep = selection.stream().mapToInt(Note::step).min().orElse(0);
+                targetPitch = selection.stream().mapToDouble(Note::pitch).min().orElse(0);
+            } else {
+                targetStep = stepAfterLastNote();
+                targetPitch = clipboardPitch;
+            }
+            int firstStep = clipboard.stream().mapToInt(Clip::step).min().orElse(0);
+            int lastStep = 0;
+            for (var clip : clipboard) {
+                lastStep = Math.max(lastStep,
+                        clip.step() + Math.max(1, (int) Math.ceil(clip.length() / Pattern.CELL)));
+            }
+            int span = lastStep - firstStep + 1;
+            if (span > stepCount()) {
+                notice = "패턴보다 긴 음표 묶음은 붙여넣을 수 없습니다.";
+                draw();
+                return;
+            }
+            targetStep = Math.max(0, Math.min(stepCount() - span, targetStep));
+            double lowPitch = clipboard.stream().mapToDouble(Clip::pitch).min().orElse(0);
+            double highPitch = clipboard.stream().mapToDouble(Clip::pitch).max().orElse(0);
+            targetPitch = Math.max(MIN_PITCH - lowPitch, Math.min(MAX_PITCH - highPitch, targetPitch));
+
+            var updated = hits;
+            selection.clear();
+            for (var clip : clipboard) {
+                int step = targetStep + clip.step() - firstStep;
+                double pitch = targetPitch + clip.pitch();
+                updated = Pattern.addNote(updated, trackIndex, step, pitch,
+                        clip.velocity(), clip.length());
+                selection.add(new Note(step, pitch));
+            }
+            hits = updated;
+            rangeSet = false;
+            notice = clipboard.size() + "개 음표를 붙여넣었습니다.";
+            onChange.accept(hits);
+            draw();
+        }
+
+        private int stepAfterLastNote() {
+            int last = 0;
+            for (var hit : hits) {
+                if (!visible(hit)) continue;
+                last = Math.max(last, stepOf(hit.beat())
+                        + Math.max(1, (int) Math.ceil(hit.length() / Pattern.CELL)));
+            }
+            return last;
         }
 
         @Override protected void layoutChildren() {
@@ -315,6 +437,7 @@ final class PianoRollDialog {
             drawKeys(gc);
             drawGrid(gc, w, h);
             drawNotes(gc, w);
+            drawMarquee(gc, w, h);
             updateFooter();
         }
 
@@ -325,18 +448,20 @@ final class PianoRollDialog {
         private void updateFooter() {
             long count = hits.stream().filter(this::visible).count();
             var hit = selectedHit();
-            String info = hit == null
-                    ? "음표 " + count + "개"
+            String info = notice != null ? notice
+                    : selection.size() > 1 ? selection.size() + "개 선택"
+                    : hit == null ? "음표 " + count + "개"
                     : NoteNames.name(midiFor(hit.pitch())) + " · " + lengthLabel(hit.length())
                             + " · " + Math.round(hit.velocity() * 100) + "%";
-            footer.setText(info + "   ·   클릭: 추가 · 드래그: 이동 · 오른쪽 끝: 길이"
-                    + " · Del/오른쪽 클릭: 삭제");
+            footer.setText(info + "   ·   클릭: 추가/삭제 · 드래그: 선택 · 음표 드래그: 이동"
+                    + " · 오른쪽 끝: 길이 · Ctrl+C/V · Del/오른쪽 클릭: 삭제");
         }
 
         private Beat.Hit selectedHit() {
-            if (selected == null) return null;
-            return Pattern.notes(hits, trackIndex, selected.step()).stream()
-                    .filter(hit -> close(hit.pitch(), selected.pitch()))
+            if (selection.size() != 1) return null;
+            var note = selection.get(0);
+            return Pattern.notes(hits, trackIndex, note.step()).stream()
+                    .filter(hit -> close(hit.pitch(), note.pitch()))
                     .findFirst().orElse(null);
         }
 
@@ -394,7 +519,7 @@ final class PianoRollDialog {
                     gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .15));
                     gc.fillRect(0, y, KEY_W, ROW_H - .5);
                 }
-                if (selected != null && close(selected.pitch(), offset)) {
+                if (pitchSelected(offset)) {
                     gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .10));
                     gc.fillRect(0, y, KEY_W, ROW_H - 1);
                 }
@@ -472,13 +597,13 @@ final class PianoRollDialog {
                     gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .055));
                     gc.fillRect(KEY_W, y, w - KEY_W, ROW_H);
                 }
-                if (selected != null && close(selected.pitch(), offset)) {
+                if (pitchSelected(offset)) {
                     gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .032));
                     gc.fillRect(KEY_W, y, w - KEY_W, ROW_H);
                 }
             }
-            if (selected != null) {
-                double x = xForStep(selected.step());
+            for (int step : selectedSteps()) {
+                double x = xForStep(step);
                 gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .035));
                 gc.fillRect(x, RULER_H, stepWidth, h - RULER_H);
             }
@@ -504,9 +629,7 @@ final class PianoRollDialog {
                 double width = Math.max(5, hit.length() * Pattern.STEPS_PER_BEAT * stepWidth);
                 if (x + width < KEY_W || x > w) continue;
                 double y = yForPitch(hit.pitch()) + 1.5;
-                boolean isSelected = selected != null
-                        && selected.step() == stepOf(hit.beat())
-                        && close(selected.pitch(), hit.pitch());
+                boolean isSelected = selected(hit);
                 double opacity = .55 + hit.velocity() * .42;
                 gc.setFill(DawStyle.alpha(Color.BLACK, .38));
                 gc.fillRoundRect(Math.max(KEY_W, x) + 1, y + 2, width - 1, ROW_H - 3, 3, 3);
@@ -535,6 +658,22 @@ final class PianoRollDialog {
             gc.restore();
         }
 
+        private void drawMarquee(GraphicsContext gc, double w, double h) {
+            if (!rangeSet) return;
+            double left = Math.max(KEY_W, xForStep(Math.min(rangeStep0, rangeStep1)));
+            double right = Math.min(w, xForStep(Math.max(rangeStep0, rangeStep1) + 1));
+            double top = Math.max(RULER_H, yForPitch(Math.max(rangePitch0, rangePitch1)));
+            double bottom = Math.min(h, yForPitch(Math.min(rangePitch0, rangePitch1)) + ROW_H);
+            if (right <= left || bottom <= top) return;
+            gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .09));
+            gc.fillRect(left, top, right - left, bottom - top);
+            gc.setStroke(DawStyle.alpha(DawStyle.ACCENT, .85));
+            gc.setLineWidth(1);
+            gc.setLineDashes(3, 3);
+            gc.strokeRect(left + .5, top + .5, right - left - 1, bottom - top - 1);
+            gc.setLineDashes();
+        }
+
         private String lengthLabel(double beats) {
             if (Math.abs(beats - .25) < .001) return "1/16";
             if (Math.abs(beats - .5) < .001) return "1/8";
@@ -550,7 +689,7 @@ final class PianoRollDialog {
             if (step != hoverStep || pitch != hoverPitch) {
                 hoverStep = step;
                 hoverPitch = pitch;
-                canvas.setCursor(step >= 0 && pitch != Integer.MIN_VALUE
+                canvas.setCursor(pitch != Integer.MIN_VALUE && (step >= 0 || e.getX() < KEY_W)
                         ? javafx.scene.Cursor.HAND : javafx.scene.Cursor.DEFAULT);
                 draw();
             }
@@ -559,57 +698,210 @@ final class PianoRollDialog {
         private void mousePressed(javafx.scene.input.MouseEvent e) {
             requestFocus();
             if (e.getButton() != MouseButton.PRIMARY) return;
-            var hit = hitAt(e.getX(), e.getY());
-            if (hit != null) {
-                selected = new Selected(stepOf(hit.beat()), hit.pitch());
-                boolean resize = e.getX() >= xForBeat(hit.beat())
-                        + hit.length() * Pattern.STEPS_PER_BEAT * stepWidth - 7;
-                drag = new Drag(selected, hit, resize, (int) e.getX());
-                draw();
+            notice = null;
+            double x = e.getX(), y = e.getY();
+            if (x < KEY_W) {
+                int pitch = pitchAt(y);
+                if (pitch != Integer.MIN_VALUE) onPreview.accept((double) pitch, 1.0);
                 return;
             }
-            int step = stepAt(e.getX());
-            int pitch = pitchAt(e.getY());
+            int step = stepAt(x);
+            int pitch = pitchAt(y);
             if (step < 0 || pitch == Integer.MIN_VALUE) return;
-            selected = new Selected(step, pitch);
-            double length = Math.min(newLength, loopBeats - Pattern.stepBeat(step));
-            if (length < .01) return;
-            hits = Pattern.addNote(hits, trackIndex, step, pitch, newVelocity, length);
-            drag = new Drag(selected, hitAtPitch(step, pitch), false, (int) e.getX());
-            onChange.accept(hits);
+            pressX = x;
+            pressY = y;
+            pressStep = step;
+            pressPitch = pitch;
+            var hit = hitAt(x, y);
+            if (hit != null) {
+                pressNote = new Note(stepOf(hit.beat()), hit.pitch());
+                if (!selected(pressNote.step(), pressNote.pitch())) {
+                    selection.clear();
+                    selection.add(pressNote);
+                }
+                boolean resize = x >= xForBeat(hit.beat())
+                        + hit.length() * Pattern.STEPS_PER_BEAT * stepWidth - 7;
+                dragFull = hits;
+                dragNotes = hits.stream()
+                        .filter(note -> note.track() == trackIndex && selected(note)).toList();
+                dragSelection = List.copyOf(selection);
+                resizeHit = hit;
+                mode = resize ? Mode.RESIZE : Mode.MOVE;
+            } else {
+                pressNote = null;
+                mode = Mode.MARQUEE;
+                setRange(step, pitch);
+                selection.clear();
+            }
             draw();
         }
 
         private void mouseDragged(javafx.scene.input.MouseEvent e) {
-            if (drag == null) return;
-            int step = stepAt(e.getX());
-            if (step < 0) return;
-            if (drag.resize()) {
-                double raw = (e.getX() - xForBeat(drag.hit().beat())) / (stepWidth * 4.0);
-                double length = Math.max(.25, Math.round(raw * 4) / 4.0);
-                length = Math.min(length, loopBeats - drag.hit().beat());
-                var updated = Pattern.updateNote(hits, trackIndex, drag.origin().step(),
-                        drag.origin().pitch(), drag.hit().pitch(), drag.hit().velocity(), length);
-                hits = updated;
-                selected = new Selected(drag.origin().step(), drag.hit().pitch());
-                onChange.accept(hits);
-                drag = new Drag(selected, hitAtPitch(stepOf(drag.hit().beat()), drag.hit().pitch()),
-                        true, (int) e.getX());
+            if (mode == Mode.NONE || !moved(e)) return;
+            if (mode == Mode.MARQUEE) {
+                rangeStep1 = clampedStep(e.getX());
+                rangePitch1 = clampedPitch(e.getY());
+                rangeSet = true;
+                selectInRange();
                 draw();
                 return;
             }
-            int pitch = pitchAt(e.getY());
-            if (pitch == Integer.MIN_VALUE) return;
-            double beat = Pattern.stepBeat(step);
-            double length = Math.min(drag.hit().length(), loopBeats - beat);
-            if (length < .01) return;
-            hits = removeExact(hits, drag.origin().step(), drag.origin().pitch());
-            hits = Pattern.addNote(hits, trackIndex, step, pitch, drag.hit().velocity(), length);
-            selected = new Selected(step, pitch);
-            var moved = hitAtPitch(step, pitch);
-            drag = new Drag(selected, moved, false, (int) e.getX());
+            if (mode == Mode.RESIZE) {
+                if (resizeHit == null) return;
+                double raw = (e.getX() - xForBeat(resizeHit.beat())) / (stepWidth * 4.0);
+                double length = Math.max(.25, Math.round(raw * 4) / 4.0);
+                length = Math.min(length, loopBeats - resizeHit.beat());
+                if (length < .01) return;
+                hits = Pattern.updateNote(hits, trackIndex, stepOf(resizeHit.beat()),
+                        resizeHit.pitch(), resizeHit.pitch(), resizeHit.velocity(), length);
+                notice = "길이 " + lengthLabel(length);
+                onChange.accept(hits);
+                draw();
+                return;
+            }
+            if (mode != Mode.MOVE || dragNotes.isEmpty()) return;
+            int step = clampedStep(e.getX());
+            int pitch = clampedPitch(e.getY());
+            int dStep = step - pressStep;
+            int dPitch = pitch - pressPitch;
+            int minStep = Integer.MAX_VALUE, maxStep = Integer.MIN_VALUE;
+            double minPitch = Double.MAX_VALUE, maxPitch = -Double.MAX_VALUE;
+            for (var hit : dragNotes) {
+                int hitStep = stepOf(hit.beat());
+                minStep = Math.min(minStep, hitStep);
+                maxStep = Math.max(maxStep, hitStep);
+                minPitch = Math.min(minPitch, hit.pitch());
+                maxPitch = Math.max(maxPitch, hit.pitch());
+            }
+            dStep = Math.max(-minStep, Math.min(stepCount() - 1 - maxStep, dStep));
+            dPitch = (int) Math.max(Math.ceil(MIN_PITCH - minPitch),
+                    Math.min(Math.floor(MAX_PITCH - maxPitch), dPitch));
+            var updated = removeNotes(dragFull, dragSelection);
+            selection.clear();
+            for (var hit : dragNotes) {
+                int nextStep = stepOf(hit.beat()) + dStep;
+                double nextPitch = hit.pitch() + dPitch;
+                updated = Pattern.addNote(updated, trackIndex, nextStep, nextPitch,
+                        hit.velocity(), hit.length());
+                selection.add(new Note(nextStep, nextPitch));
+            }
+            hits = updated;
+            notice = selection.size() + "개 음표 이동";
             onChange.accept(hits);
             draw();
+        }
+
+        private void mouseReleased(javafx.scene.input.MouseEvent e) {
+            if (e.getButton() != MouseButton.PRIMARY) {
+                mode = Mode.NONE;
+                return;
+            }
+            var released = mode;
+            mode = Mode.NONE;
+            if (released == Mode.MARQUEE && !moved(e)) {
+                var existing = hitAtPitch(pressStep, pressPitch);
+                if (existing != null) {
+                    hits = removeNotes(hits, List.of(new Note(pressStep, pressPitch)));
+                    selection.removeIf(note -> note.step() == pressStep
+                            && close(note.pitch(), pressPitch));
+                    notice = "음표를 삭제했습니다.";
+                    onChange.accept(hits);
+                } else {
+                    double length = Math.min(newLength, loopBeats - Pattern.stepBeat(pressStep));
+                    if (length >= .01) {
+                        hits = Pattern.addNote(hits, trackIndex, pressStep, pressPitch,
+                                newVelocity, length);
+                        selection.clear();
+                        selection.add(new Note(pressStep, pressPitch));
+                        notice = "음표 추가 · " + NoteNames.name(midiFor(pressPitch));
+                        onChange.accept(hits);
+                        onPreview.accept((double) pressPitch, newVelocity);
+                    }
+                }
+            } else if (released == Mode.MOVE && !moved(e) && pressNote != null) {
+                hits = removeNotes(hits, List.of(pressNote));
+                selection.removeIf(note -> note.step() == pressNote.step()
+                        && close(note.pitch(), pressNote.pitch()));
+                notice = "음표를 삭제했습니다.";
+                onChange.accept(hits);
+            }
+            pressNote = null;
+            dragFull = List.of();
+            dragNotes = List.of();
+            dragSelection = List.of();
+            resizeHit = null;
+            draw();
+        }
+
+        private boolean moved(javafx.scene.input.MouseEvent e) {
+            return Math.abs(e.getX() - pressX) > 3 || Math.abs(e.getY() - pressY) > 3;
+        }
+
+        private void setRange(int step, int pitch) {
+            rangeStep0 = step;
+            rangeStep1 = step;
+            rangePitch0 = pitch;
+            rangePitch1 = pitch;
+            rangeSet = true;
+        }
+
+        private void selectInRange() {
+            int firstStep = Math.min(rangeStep0, rangeStep1);
+            int lastStep = Math.max(rangeStep0, rangeStep1);
+            int lowPitch = Math.min(rangePitch0, rangePitch1);
+            int highPitch = Math.max(rangePitch0, rangePitch1);
+            selection.clear();
+            for (var hit : hits) {
+                if (!visible(hit)) continue;
+                int step = stepOf(hit.beat());
+                double pitch = hit.pitch();
+                if (step >= firstStep && step <= lastStep
+                        && pitch >= lowPitch - 1e-9 && pitch <= highPitch + 1e-9) {
+                    selection.add(new Note(step, pitch));
+                }
+            }
+        }
+
+        private boolean selected(Beat.Hit hit) {
+            return selected(stepOf(hit.beat()), hit.pitch());
+        }
+
+        private boolean selected(int step, double pitch) {
+            for (var note : selection) {
+                if (note.step() == step && close(note.pitch(), pitch)) return true;
+            }
+            return false;
+        }
+
+        private boolean pitchSelected(double pitch) {
+            for (var note : selection) if (close(note.pitch(), pitch)) return true;
+            return false;
+        }
+
+        private List<Integer> selectedSteps() {
+            var steps = new ArrayList<Integer>();
+            for (var note : selection) if (!steps.contains(note.step())) steps.add(note.step());
+            return steps;
+        }
+
+        private boolean hasNote(int step, double pitch) {
+            for (var hit : hits) {
+                if (visible(hit) && stepOf(hit.beat()) == step && close(hit.pitch(), pitch)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private List<Beat.Hit> removeNotes(List<Beat.Hit> source, List<Note> notes) {
+            var result = new ArrayList<Beat.Hit>();
+            for (var hit : source) {
+                boolean drop = hit.track() == trackIndex && notes.stream()
+                        .anyMatch(note -> note.step() == stepOf(hit.beat())
+                                && close(note.pitch(), hit.pitch()));
+                if (!drop) result.add(hit);
+            }
+            return List.copyOf(result);
         }
 
         private Beat.Hit hitAt(double x, double y) {
@@ -631,22 +923,22 @@ final class PianoRollDialog {
         }
 
         private void remove(Beat.Hit hit) {
-            var notes = Pattern.notes(hits, trackIndex, stepOf(hit.beat()));
-            if (notes.isEmpty()) return;
             hits = Pattern.removeNote(hits, trackIndex, stepOf(hit.beat()), hit.pitch());
-            selected = null;
+            selection.removeIf(note -> note.step() == stepOf(hit.beat())
+                    && close(note.pitch(), hit.pitch()));
+            notice = "음표를 삭제했습니다.";
             onChange.accept(hits);
             draw();
         }
 
-        private List<Beat.Hit> removeExact(List<Beat.Hit> source, int step, double pitch) {
-            var result = new ArrayList<Beat.Hit>();
-            for (var hit : source) {
-                if (hit.track() == trackIndex && stepOf(hit.beat()) == step
-                        && close(hit.pitch(), pitch)) continue;
-                result.add(hit);
-            }
-            return List.copyOf(result);
+        private int clampedStep(double x) {
+            int step = (int) Math.floor((x - KEY_W + horizontal.getValue()) / stepWidth);
+            return Math.max(0, Math.min(stepCount() - 1, step));
+        }
+
+        private int clampedPitch(double y) {
+            int offset = MAX_PITCH - (int) Math.floor((y - RULER_H + vertical.getValue()) / ROW_H);
+            return Math.max(MIN_PITCH, Math.min(MAX_PITCH, offset));
         }
 
         private double xForStep(int step) { return KEY_W + step * stepWidth - horizontal.getValue(); }

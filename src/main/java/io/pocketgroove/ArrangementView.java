@@ -9,6 +9,7 @@ import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.Region;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
@@ -62,6 +63,7 @@ final class ArrangementView extends Region {
     private boolean panning;
     private double panX, panY, panBeat, panTrack;
     private int flashTrack = -1;
+    private ContextMenu openMenu;
 
     ArrangementView() {
         getStyleClass().add("arrangement");
@@ -336,7 +338,7 @@ final class ArrangementView extends Region {
         menu.getItems().addAll(repeatMenu, pitchMenu, new SeparatorMenuItem(),
                 delete, copy, paste, new SeparatorMenuItem(),
                 new MenuItemHeader("반복: 마디 패턴 공유 / 개별: 마디마다 독립 편집"));
-        menu.show(canvas, screenX, screenY);
+        showMenu(menu, screenX, screenY);
     }
 
     private void showPitchModeMenu(int index, double screenX, double screenY) {
@@ -370,7 +372,26 @@ final class ArrangementView extends Region {
         menu.getItems().addAll(repeatMenu, new SeparatorMenuItem(), varispeed, pitchShift,
                 new SeparatorMenuItem(),
                 new MenuItemHeader("길이 유지: 음높이만 변경 / 속도 변경: 피치에 따라 길이도 변경"));
+        showMenu(menu, screenX, screenY);
+    }
+
+    private void showMenu(ContextMenu menu, double screenX, double screenY) {
+        if (openMenu != null) openMenu.hide();
+        openMenu = menu;
+        menu.setAutoHide(true);
         menu.show(canvas, screenX, screenY);
+        var scene = getScene();
+        if (scene == null) return;
+        javafx.event.EventHandler<MouseEvent> closeOnPress = e -> menu.hide();
+        scene.addEventFilter(MouseEvent.MOUSE_PRESSED, closeOnPress);
+        menu.setOnHidden(e -> {
+            scene.removeEventFilter(MouseEvent.MOUSE_PRESSED, closeOnPress);
+            if (openMenu == menu) openMenu = null;
+        });
+    }
+
+    boolean menuShowingForTest() {
+        return openMenu != null && openMenu.isShowing();
     }
 
     private static final class MenuItemHeader extends javafx.scene.control.MenuItem {

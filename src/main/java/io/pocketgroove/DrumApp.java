@@ -607,7 +607,28 @@ public final class DrumApp extends Application {
         double rollBeats = track.repeat() ? length : projectBars * 4.0;
         pianoRoll = PianoRollDialog.show(stage, track, index, hits, rollBeats, pitch.getValue(),
                 updated -> applyPianoRoll(index, updated),
-                (base, formant) -> applyMelodySettings(index, base, formant));
+                (base, formant) -> applyMelodySettings(index, base, formant),
+                (notePitch, velocity) -> previewNote(index, notePitch, velocity));
+    }
+
+    private void previewNote(int index, double notePitch, double velocity) {
+        var engine = audio;
+        if (engine == null || index < 0 || index >= tracks.size()) return;
+        var track = tracks.get(index);
+        boolean pitchShift = track.pitchMode() == Beat.PitchMode.PITCH_SHIFT;
+        try {
+            // Varispeed preview is instant for any note, even before its pitch-shift variant exists.
+            if (pitchShift) engine.trackMode(index, false);
+            engine.hit(index, Math.max(.05, Math.min(1, velocity)), notePitch);
+        } catch (RuntimeException ignored) {
+        } finally {
+            if (pitchShift) {
+                try {
+                    engine.trackMode(index, true);
+                } catch (RuntimeException ignored) {
+                }
+            }
+        }
     }
 
     private void applyPianoRoll(int index, List<Beat.Hit> updated) {
