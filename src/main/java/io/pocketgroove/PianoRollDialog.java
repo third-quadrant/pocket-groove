@@ -378,28 +378,16 @@ final class PianoRollDialog {
                 }
                 if (selected != null && close(selected.pitch(), offset)) {
                     gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .10));
-                    gc.fillRect(0, y, KEY_W, ROW_H - .5);
-                }
-                gc.setFill(DawStyle.alpha(Color.web("#AEB5BE"), .42));
-                gc.fillRect(0, y + ROW_H - .5, KEY_W, .5);
-                if (!black) {
-                    gc.setFill(DawStyle.alpha(Color.web("#AEB5BE"), .72));
-                    gc.fillRect(0, y + ROW_H - .8, KEY_W, .8);
-                    if (pitchClass == 4 || pitchClass == 11) {
-                        gc.setFill(DawStyle.alpha(Color.web("#858E99"), .85));
-                        gc.fillRect(0, y + ROW_H - 1.3, KEY_W, 1.1);
-                    }
+                    gc.fillRect(0, y, KEY_W, ROW_H - 1);
                 }
                 if (black) {
                     double blackWidth = KEY_W * .58;
-                    gc.setFill(DawStyle.alpha(Color.BLACK, .30));
-                    gc.fillRect(blackWidth, y + 1.5, 3, ROW_H - 3);
+                    gc.setFill(DawStyle.alpha(Color.BLACK, .28));
+                    gc.fillRect(blackWidth, y + 1, 2, ROW_H - 2);
                     gc.setFill(Color.web("#171A1F"));
-                    gc.fillRect(0, y + .5, blackWidth, ROW_H - 1.5);
+                    gc.fillRect(0, y, blackWidth, ROW_H - 1);
                     gc.setFill(Color.web("#30353C"));
-                    gc.fillRect(0, y + .5, blackWidth, 1);
-                    gc.setFill(DawStyle.alpha(Color.WHITE, .08));
-                    gc.fillRect(0, y + ROW_H - 3, blackWidth, .8);
+                    gc.fillRect(0, y, blackWidth, 1);
                 }
                 if (!black) {
                     gc.setTextAlign(TextAlignment.RIGHT);
@@ -408,8 +396,10 @@ final class PianoRollDialog {
                 }
                 if (offset == 0) {
                     gc.setFill(DawStyle.ACCENT);
-                    gc.fillRect(KEY_W - 3, y + 1, 2.5, ROW_H - 2);
+                    gc.fillRect(KEY_W - 3, y + 1, 2, ROW_H - 2);
                 }
+                gc.setFill(DawStyle.alpha(Color.web("#AEB5BE"), .68));
+                gc.fillRect(0, y + ROW_H - 1, KEY_W, 1);
             }
             gc.setTextAlign(TextAlignment.LEFT);
             gc.restore();
