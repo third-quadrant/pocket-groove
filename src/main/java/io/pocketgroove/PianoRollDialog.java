@@ -35,6 +35,10 @@ import java.util.function.Consumer;
 
 /** Modeless-ish piano roll for one melody track; edits are applied to the shared project immediately. */
 final class PianoRollDialog {
+    static final double KEY_W = 124;
+    static final double RULER_H = 26;
+    static final double ROW_H = 15;
+
     private PianoRollDialog() {}
 
     static Stage show(Window owner, Beat.Track track, int trackIndex, List<Beat.Hit> initial,
@@ -146,9 +150,6 @@ final class PianoRollDialog {
     }
 
     private static final class PianoRollView extends Region {
-        private static final double KEY_W = 72;
-        private static final double RULER_H = 26;
-        private static final double ROW_H = 12;
         private static final double MIN_STEP_WIDTH = 18;
         private static final double MAX_STEP_WIDTH = 64;
         private static final int MIN_PITCH = -Beat.MAX_NOTE_PITCH;
@@ -362,7 +363,7 @@ final class PianoRollDialog {
             gc.rect(0, RULER_H, KEY_W, Math.max(0, h - RULER_H));
             gc.clip();
             gc.setFill(new LinearGradient(0, 0, 0, 1, true, CycleMethod.NO_CYCLE,
-                    new Stop(0, Color.web("#EEF1F4")), new Stop(1, Color.web("#CDD2D8"))));
+                    new Stop(0, Color.web("#F1F3F5")), new Stop(1, Color.web("#C9CFD6"))));
             gc.fillRect(0, RULER_H, KEY_W, Math.max(0, h - RULER_H));
             gc.setFont(DawStyle.display(8));
             for (int offset = MAX_PITCH; offset >= MIN_PITCH; offset--) {
@@ -371,45 +372,46 @@ final class PianoRollDialog {
                 int midi = midiFor(offset);
                 int pitchClass = Math.floorMod(midi, 12);
                 boolean black = isBlack(pitchClass);
-                if (!black) {
-                    gc.setFill(DawStyle.alpha(Color.web("#AEB5BE"), .62));
-                    gc.fillRect(0, y + ROW_H - .5, KEY_W, .5);
-                    if (pitchClass == 4 || pitchClass == 11) {
-                        gc.setFill(DawStyle.alpha(Color.web("#8D959F"), .78));
-                        gc.fillRect(0, y + ROW_H - 1.2, KEY_W, 1);
-                    }
-                }
-                if (black) {
-                    double blackWidth = KEY_W * .62;
-                    gc.setFill(DawStyle.alpha(Color.BLACK, .26));
-                    gc.fillRect(blackWidth, y + 1.5, 3, ROW_H - 3);
-                    gc.setFill(Color.web("#171A1F"));
-                    gc.fillRect(0, y + .5, blackWidth, ROW_H - 1.5);
-                    gc.setFill(Color.web("#2B3037"));
-                    gc.fillRect(0, y + .5, blackWidth, 1);
-                    gc.setFill(DawStyle.alpha(Color.WHITE, .07));
-                    gc.fillRect(0, y + ROW_H - 2.5, blackWidth, .7);
-                }
-                if (pitchClass == 0) {
-                    gc.setFill(black ? DawStyle.MUTED : Color.web("#3B4148"));
-                    gc.fillText(noteName(midi), 6, y + ROW_H - 2);
-                }
-                if (offset == 0) {
-                    gc.setFill(DawStyle.ACCENT);
-                    gc.fillRect(KEY_W - 3, y + 1, 2.5, ROW_H - 2);
-                    gc.setFont(DawStyle.display(7));
-                    gc.fillText("BASE", KEY_W - 31, y + ROW_H - 3);
-                    gc.setFont(DawStyle.display(8));
-                }
                 if (hoverPitch == offset) {
-                    gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .16));
+                    gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .15));
                     gc.fillRect(0, y, KEY_W, ROW_H - .5);
                 }
                 if (selected != null && close(selected.pitch(), offset)) {
                     gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .10));
                     gc.fillRect(0, y, KEY_W, ROW_H - .5);
                 }
+                gc.setFill(DawStyle.alpha(Color.web("#AEB5BE"), .42));
+                gc.fillRect(0, y + ROW_H - .5, KEY_W, .5);
+                if (!black) {
+                    gc.setFill(DawStyle.alpha(Color.web("#AEB5BE"), .72));
+                    gc.fillRect(0, y + ROW_H - .8, KEY_W, .8);
+                    if (pitchClass == 4 || pitchClass == 11) {
+                        gc.setFill(DawStyle.alpha(Color.web("#858E99"), .85));
+                        gc.fillRect(0, y + ROW_H - 1.3, KEY_W, 1.1);
+                    }
+                }
+                if (black) {
+                    double blackWidth = KEY_W * .58;
+                    gc.setFill(DawStyle.alpha(Color.BLACK, .30));
+                    gc.fillRect(blackWidth, y + 1.5, 3, ROW_H - 3);
+                    gc.setFill(Color.web("#171A1F"));
+                    gc.fillRect(0, y + .5, blackWidth, ROW_H - 1.5);
+                    gc.setFill(Color.web("#30353C"));
+                    gc.fillRect(0, y + .5, blackWidth, 1);
+                    gc.setFill(DawStyle.alpha(Color.WHITE, .08));
+                    gc.fillRect(0, y + ROW_H - 3, blackWidth, .8);
+                }
+                if (!black) {
+                    gc.setTextAlign(TextAlignment.RIGHT);
+                    gc.setFill(offset == 0 ? DawStyle.ACCENT : Color.web("#3B4148"));
+                    gc.fillText(noteName(midi), KEY_W - 9, y + ROW_H / 2 + 3);
+                }
+                if (offset == 0) {
+                    gc.setFill(DawStyle.ACCENT);
+                    gc.fillRect(KEY_W - 3, y + 1, 2.5, ROW_H - 2);
+                }
             }
+            gc.setTextAlign(TextAlignment.LEFT);
             gc.restore();
             gc.setFill(DawStyle.alpha(Color.BLACK, .30));
             gc.fillRect(KEY_W - 3, RULER_H, 3, Math.max(0, h - RULER_H));
