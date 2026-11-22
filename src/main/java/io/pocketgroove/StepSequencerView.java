@@ -10,7 +10,10 @@ import javafx.scene.layout.Region;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
@@ -36,6 +39,7 @@ final class StepSequencerView extends Region {
     private Beat.Track track;
     private int trackIndex;
     private double loopBeats = 4;
+    private double windowStart;
     private int selectedStep;
     private int hoverStep = -1;
     private int playheadStep = -1;
@@ -83,10 +87,16 @@ final class StepSequencerView extends Region {
     }
 
     void setData(int trackIndex, Beat.Track track, List<Beat.Hit> hits, double loopBeats) {
+        setData(trackIndex, track, hits, loopBeats, 0);
+    }
+
+    void setData(int trackIndex, Beat.Track track, List<Beat.Hit> hits, double loopBeats,
+                 double windowStart) {
         this.trackIndex = trackIndex;
         this.track = track;
         this.hits = List.copyOf(hits);
         this.loopBeats = loopBeats;
+        this.windowStart = windowStart;
         selectedStep = Math.min(selectedStep, Pattern.stepCount(loopBeats) - 1);
         updateBar();
         updateAccessible();
@@ -111,7 +121,16 @@ final class StepSequencerView extends Region {
 
     void setPlayhead(double position, boolean playing) {
         this.playing = playing;
-        int next = playing ? Math.floorMod((int) Math.floor(position * Pattern.STEPS_PER_BEAT), stepCount()) : -1;
+        int next = -1;
+        if (playing) {
+            int absolute = (int) Math.floor(position * Pattern.STEPS_PER_BEAT);
+            if (track != null && track.repeat()) {
+                next = Math.floorMod(absolute, stepCount());
+            } else {
+                int relative = absolute - (int) Math.round(windowStart * Pattern.STEPS_PER_BEAT);
+                if (relative >= 0 && relative < stepCount()) next = relative;
+            }
+        }
         if (next != playheadStep || playing) {
             playheadStep = next;
             draw();
@@ -184,7 +203,7 @@ final class StepSequencerView extends Region {
         gc.setFont(DawStyle.display(9));
         gc.setFill(DawStyle.MUTED);
         if (track.instrument() == Beat.Instrument.MELODY) {
-            gc.fillText("MELODY · BASE MIDI " + track.baseMidiNote(), 30, 37);
+            gc.fillText("MELODY · BASE " + NoteNames.name(track.baseMidiNote()), 30, 37);
         } else {
             gc.fillText("DRUM · PATTERN A", 30, 37);
         }
@@ -192,11 +211,11 @@ final class StepSequencerView extends Region {
         boolean active = cells.active()[selectedStep];
         double velocity = cells.velocity()[selectedStep];
         double notePitch = cells.pitch()[selectedStep];
-        int chord = Pattern.chordSize(hits, trackIndex, selectedStep);
+        int chord = Pattern.chordSize(windowHits(), trackIndex, selectedStep);
         gc.setTextAlign(TextAlignment.RIGHT);
         gc.setFont(DawStyle.display(10));
         gc.setFill(DawStyle.MUTED);
-        int bar = selectedStep / 16 + 1;
+        int bar = (int) (windowStart / 4) + selectedStep / 16 + 1;
         int step = selectedStep % 16 + 1;
         gc.fillText(String.format("STEP %02d · BAR %02d   %s   NOTE %s   %d%%%s", step, bar,
                 active ? "ON" : "OFF", formatPitch(notePitch), Math.round(velocity * 100),
@@ -350,9 +369,11 @@ final class StepSequencerView extends Region {
         double[] pitch = new double[count];
         for (var hit : hits) {
             if (hit.track() != trackIndex) continue;
-            int step = (int) Math.round(hit.beat() / Pattern.CELL);
+            double local = hit.beat() - windowStart;
+            if (local < 0 || local >= loopBeats) continue;
+            int step = (int) Math.round(local / Pattern.CELL);
             if (step < 0 || step >= count) continue;
-            if (Math.abs(hit.beat() - Pattern.stepBeat(step)) >= Pattern.CELL / 2) continue;
+            if (Math.abs(local - Pattern.stepBeat(step)) >= Pattern.CELL / 2) continue;
             active[step] = true;
             if (hit.velocity() >= velocity[step]) {
                 velocity[step] = hit.velocity();
@@ -360,6 +381,36 @@ final class StepSequencerView extends Region {
             }
         }
         return new Cells(active, velocity, pitch);
+    }
+
+    private List<Beat.Hit> windowHits() {
+        var result = new ArrayList<Beat.Hit>();
+        for (var hit : hits) {
+            if (hit.track() != trackIndex) continue;
+            double local = hit.beat() - windowStart;
+            if (local < 0 || local >= loopBeats) continue;
+            result.add(new Beat.Hit(trackIndex, local, hit.velocity(), hit.pitch(), hit.length()));
+        }
+        return result;
+    }
+
+    private void applyWindow(Function<List<Beat.Hit>, List<Beat.Hit>> operation) {
+        var edited = operation.apply(windowHits());
+        var merged = new ArrayList<Beat.Hit>();
+        for (var hit : hits) {
+            if (hit.track() == trackIndex && hit.beat() >= windowStart
+                    && hit.beat() < windowStart + loopBeats) continue;
+            merged.add(hit);
+        }
+        for (var hit : edited) {
+            merged.add(new Beat.Hit(trackIndex, hit.beat() + windowStart,
+                    hit.velocity(), hit.pitch(), hit.length()));
+        }
+        merged.sort(Comparator.comparingDouble(Beat.Hit::beat)
+                .thenComparingInt(Beat.Hit::track)
+                .thenComparingDouble(Beat.Hit::pitch));
+        hits = List.copyOf(merged);
+        commit();
     }
 
     private record Cells(boolean[] active, double[] velocity, double[] pitch) {}
@@ -371,7 +422,8 @@ final class StepSequencerView extends Region {
         gc.fillText("스텝 클릭·드래그 · NOTE: 1반음 · Ctrl+드래그: 0.1반음 · ↑↓ 세기 · Shift+↑↓ 음높이",
                 PAD, h - 9);
         gc.setTextAlign(TextAlignment.RIGHT);
-        gc.fillText("PATTERN A", w - PAD, h - 9);
+        gc.fillText(track != null && track.repeat() ? "PATTERN A"
+                : "BAR " + ((int) (windowStart / 4) + 1), w - PAD, h - 9);
     }
 
     private void mouseMoved(javafx.scene.input.MouseEvent e) {
@@ -392,22 +444,20 @@ final class StepSequencerView extends Region {
         if (step < 0) return;
         selectStep(step);
         if (e.getY() >= STEP_TOP && e.getY() <= STEP_TOP + STEP_H) {
-            var cell = Pattern.cell(hits, trackIndex, step);
+            var cell = Pattern.cell(windowHits(), trackIndex, step);
             paintActive = !cell.active();
-            hits = Pattern.setActive(hits, trackIndex, step, paintActive, loopBeats, 0.8);
+            applyWindow(local -> Pattern.setActive(local, trackIndex, step, paintActive, loopBeats, 0.8));
             draggingGrid = true;
             lastPaintedStep = step;
-            commit();
         } else if (e.getY() >= VEL_TOP && e.getY() <= VEL_TOP + VEL_H) {
             draggingVelocity = true;
             lastVelocityStep = step;
-            hits = Pattern.setVelocity(hits, trackIndex, step, velocityAt(e.getY()));
-            commit();
+            applyWindow(local -> Pattern.setVelocity(local, trackIndex, step, velocityAt(e.getY())));
         } else if (e.getY() >= PITCH_TOP && e.getY() <= PITCH_TOP + PITCH_H) {
             draggingPitch = true;
             lastPitchStep = step;
-            hits = Pattern.setPitch(hits, trackIndex, step, pitchAt(e.getY(), e.isControlDown()));
-            commit();
+            applyWindow(local -> Pattern.setPitch(local, trackIndex, step,
+                    pitchAt(e.getY(), e.isControlDown())));
         }
     }
 
@@ -416,22 +466,21 @@ final class StepSequencerView extends Region {
         if (step < 0) return;
         if (draggingGrid && step != lastPaintedStep) {
             selectStep(step);
-            var cell = Pattern.cell(hits, trackIndex, step);
+            var cell = Pattern.cell(windowHits(), trackIndex, step);
             if (cell.active() != paintActive) {
-                hits = Pattern.setActive(hits, trackIndex, step, paintActive, loopBeats, 0.8);
+                applyWindow(local -> Pattern.setActive(local, trackIndex, step, paintActive,
+                        loopBeats, 0.8));
                 lastPaintedStep = step;
-                commit();
             }
         } else if (draggingVelocity) {
             selectStep(step);
             if (step != lastVelocityStep) lastVelocityStep = step;
-            hits = Pattern.setVelocity(hits, trackIndex, step, velocityAt(e.getY()));
-            commit();
+            applyWindow(local -> Pattern.setVelocity(local, trackIndex, step, velocityAt(e.getY())));
         } else if (draggingPitch) {
             selectStep(step);
             if (step != lastPitchStep) lastPitchStep = step;
-            hits = Pattern.setPitch(hits, trackIndex, step, pitchAt(e.getY(), e.isControlDown()));
-            commit();
+            applyWindow(local -> Pattern.setPitch(local, trackIndex, step,
+                    pitchAt(e.getY(), e.isControlDown())));
         }
     }
 
@@ -442,23 +491,22 @@ final class StepSequencerView extends Region {
                     0, stepCount() - 1));
             e.consume();
         } else if (e.getCode() == KeyCode.SPACE || e.getCode() == KeyCode.ENTER) {
-            var cell = Pattern.cell(hits, trackIndex, selectedStep);
-            hits = Pattern.setActive(hits, trackIndex, selectedStep, !cell.active(), loopBeats, 0.8);
-            commit();
+            var cell = Pattern.cell(windowHits(), trackIndex, selectedStep);
+            applyWindow(local -> Pattern.setActive(local, trackIndex, selectedStep,
+                    !cell.active(), loopBeats, 0.8));
             e.consume();
         } else if (e.getCode() == KeyCode.UP || e.getCode() == KeyCode.DOWN) {
-            var cell = Pattern.cell(hits, trackIndex, selectedStep);
+            var cell = Pattern.cell(windowHits(), trackIndex, selectedStep);
             double amount = e.isShiftDown() ? 1 : .05;
             if (e.isShiftDown()) {
                 double pitch = clamp(cell.pitch() + (e.getCode() == KeyCode.UP ? amount : -amount),
                         -Beat.MAX_NOTE_PITCH, Beat.MAX_NOTE_PITCH);
-                hits = Pattern.setPitch(hits, trackIndex, selectedStep, pitch);
+                applyWindow(local -> Pattern.setPitch(local, trackIndex, selectedStep, pitch));
             } else {
                 double velocity = clamp(cell.velocity() + (e.getCode() == KeyCode.UP ? amount : -amount),
                         .05, 1);
-                hits = Pattern.setVelocity(hits, trackIndex, selectedStep, velocity);
+                applyWindow(local -> Pattern.setVelocity(local, trackIndex, selectedStep, velocity));
             }
-            commit();
             e.consume();
         }
     }

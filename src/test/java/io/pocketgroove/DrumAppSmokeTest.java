@@ -242,9 +242,20 @@ class DrumAppSmokeTest {
                 assertTrue(pianoWindow[0].getTitle().contains("음표 편집"));
                 window.getScene().getRoot().applyCss();
                 window.getScene().getRoot().layout();
+                var baseField = (javafx.scene.control.TextField) window.getScene().lookup("#piano-base");
+                assertEquals("C4", baseField.getText());
+                baseField.setText("D4");
+                baseField.fireEvent(new javafx.event.ActionEvent());
+                assertEquals(62, app.currentProjectForTest().tracks().get(7).baseMidiNote(),
+                        "the piano roll accepts a note name and stores the MIDI number");
+                baseField.setText("C4");
+                baseField.fireEvent(new javafx.event.ActionEvent());
+                assertEquals(60, app.currentProjectForTest().tracks().get(7).baseMidiNote());
                 var view = window.getScene().getRoot().lookup(".piano-roll");
                 var canvas = (Canvas) ((Parent) view).getChildrenUnmodifiable().get(0);
-                double stepWidth = (canvas.getWidth() - PianoRollDialog.KEY_W) / 16.0;
+                double rollSteps = app.currentProjectForTest().bars() * 16.0;
+                double stepWidth = Math.max(18, Math.min(64,
+                        (canvas.getWidth() - PianoRollDialog.KEY_W) / rollSteps));
                 double stepX = PianoRollDialog.KEY_W + stepWidth * .5;
                 int beforeNotes = app.currentProjectForTest().hits().size();
                 fireMouse(canvas, MouseEvent.MOUSE_PRESSED, stepX,
@@ -291,6 +302,50 @@ class DrumAppSmokeTest {
                 ((Button) stage.getScene().lookup("#transport-stop")).fire();
                 pianoWindow[0].close();
                 assertFalse(app.pianoRollShowingForTest());
+                return null;
+            });
+            fx(() -> {
+                long before = app.hitsForTest().stream().filter(hit -> hit.track() == 7).count();
+                app.setBarSelectionForTest(7, 0, 7, 0);
+                app.copyBarsForTest();
+                app.pasteBarsAtForTest(0);
+                assertEquals(before + 4, app.hitsForTest().stream()
+                        .filter(hit -> hit.track() == 7).count(),
+                        "pasting into an occupied bar inserts and shifts existing notes");
+                Event.fireEvent(stage.getScene(), pressed(KeyCode.Z, true, false));
+                assertEquals(before, app.hitsForTest().stream()
+                        .filter(hit -> hit.track() == 7).count(),
+                        "bar insertion is undoable");
+                app.pasteBarsAtForTest(-1);
+                assertEquals(before + 4, app.hitsForTest().stream()
+                        .filter(hit -> hit.track() == 7).count(),
+                        "pasting after the last pattern inserts the copied bar");
+                app.setBarSelectionForTest(7, 1, 7, 1);
+                app.deleteSelectedBarsForTest();
+                assertEquals(before, app.hitsForTest().stream()
+                        .filter(hit -> hit.track() == 7).count(),
+                        "deleting a selected bar removes only that bar");
+                app.setTrackRepeatForTest(7, true);
+                assertTrue(app.tracksForTest().get(7).repeat());
+                assertEquals(before, app.hitsForTest().stream()
+                        .filter(hit -> hit.track() == 7).count(),
+                        "turning repeat on must not delete note data");
+                app.setTrackRepeatForTest(7, false);
+                assertFalse(app.tracksForTest().get(7).repeat());
+                assertTrue(app.hitsForTest().stream().filter(hit -> hit.track() == 7).count() > before,
+                        "turning repeat off expands the pattern into independent bars");
+
+                long drumBarHits = app.hitsForTest().stream()
+                        .filter(hit -> hit.track() <= 1 && hit.beat() < 4.0).count();
+                assertTrue(drumBarHits > 0, "the drum tracks still have first-bar hits");
+                long allHits = app.hitsForTest().size();
+                app.setBarSelectionForTest(0, 0, 1, 0);
+                app.deleteSelectedBarsForTest();
+                assertEquals(allHits - drumBarHits, app.hitsForTest().size(),
+                        "a multi-track selection deletes each selected track's bar");
+                Event.fireEvent(stage.getScene(), pressed(KeyCode.Z, true, false));
+                assertEquals(allHits, app.hitsForTest().size(), "bar deletion is undoable");
+
                 app.removeTrackAt(7);
                 return null;
             });

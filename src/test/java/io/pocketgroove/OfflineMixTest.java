@@ -61,6 +61,47 @@ class OfflineMixTest {
         assertEquals(expectedRight, first[1], 1e-6);
     }
 
+    @Test void repeatDrumPatternIsRenderedOnEveryLoopCycle() throws Exception {
+        int rate = 48000;
+        int frames = rate / 10;
+        float[] stereo = new float[frames * 2];
+        for (int i = 0; i < frames; i++) {
+            float value = (float) (Math.sin(2 * Math.PI * 440 * i / rate) * .5);
+            stereo[i * 2] = value;
+            stereo[i * 2 + 1] = value;
+        }
+        var track = new Beat.Track("Kick", "1", "wav",
+                Sounds.wavBytes(new Sounds.Pcm(stereo, rate)), 0);
+        var project = new Beat.Project(List.of(track),
+                List.of(new Beat.Hit(0, 0, 1.0, 0, .25)), 4, 120, 0, 2);
+        var pcm = Sounds.decodeAll(project.tracks());
+        var out = new ArrayList<float[]>();
+        OfflineMix.render(project, pcm, 1.0, 1, 2, null, (samples, count) ->
+                out.add(java.util.Arrays.copyOf(samples, count * 2)));
+        float[] rendered = new float[rate * 4 * 2];
+        int at = 0;
+        for (var chunk : out) {
+            System.arraycopy(chunk, 0, rendered, at, Math.min(chunk.length, rendered.length - at));
+            at += chunk.length;
+        }
+        assertEquals(rate * 4 * 2, at);
+        assertTrue(rms(rendered, 0) > .01, "first cycle has a hit");
+        assertTrue(rms(rendered, rate * 2) > .01, "second cycle repeats the hit");
+        assertTrue(rms(rendered, rate) < .001, "there is no hit between cycles");
+    }
+
+    private static double rms(float[] pcm, int fromFrame) {
+        double sum = 0;
+        int frames = Math.min(1000, pcm.length / 2 - fromFrame);
+        if (frames <= 0) return 0;
+        for (int i = 0; i < frames; i++) {
+            float l = pcm[(fromFrame + i) * 2];
+            float r = pcm[(fromFrame + i) * 2 + 1];
+            sum += l * l + r * r;
+        }
+        return Math.sqrt(sum / (frames * 2.0));
+    }
+
     private static float[] render(Beat.Project project, PitchCache cache) throws Exception {
         var pcm = Sounds.decodeAll(project.tracks());
         var chunks = new ArrayList<float[]>();

@@ -102,29 +102,35 @@ class ProjectIOTest {
         assertEquals(Beat.Instrument.DRUM, loaded.tracks().get(0).instrument());
         assertEquals(36, loaded.tracks().get(0).baseMidiNote());
         assertFalse(loaded.tracks().get(0).formantPreserve());
+        assertTrue(loaded.tracks().get(0).repeat());
         assertEquals(Beat.DEFAULT_NOTE_LENGTH, loaded.hits().get(0).length(), 0.00001);
         assertEquals(16, loaded.bars());
         assertEquals(0.8, loaded.hits().get(0).velocity(), 0.00001);
     }
 
-    @Test void versionSevenStoresMelodyBaseFormantAndChordLengths() throws Exception {
+    @Test void versionEightStoresRepeatMelodyBaseFormantAndChordLengths() throws Exception {
         Path path = dir.resolve("melody.mdrum");
         var track = new Beat.Track("Cello", "1", "wav", new byte[]{1, 2, 3}, 2,
                 Beat.PitchMode.PITCH_SHIFT, Beat.Instrument.MELODY, 60, true);
         var chord = List.of(
                 new Beat.Hit(0, 0.25, 0.8, 0, 0.5),
                 new Beat.Hit(0, 0.25, 0.7, 4, 0.5),
-                new Beat.Hit(0, 0.25, 0.6, 7, 0.75));
+                new Beat.Hit(0, 0.25, 0.6, 7, 0.75),
+                new Beat.Hit(0, 5.5, 0.9, 12, 1.0));
         ProjectIO.save(path, new Beat.Project(List.of(track), chord, 4, 120, 0, 16));
         var loaded = ProjectIO.load(path);
         var restored = loaded.tracks().get(0);
         assertEquals(Beat.Instrument.MELODY, restored.instrument());
         assertEquals(60, restored.baseMidiNote());
         assertTrue(restored.formantPreserve());
+        assertFalse(restored.repeat());
         assertEquals(Beat.PitchMode.PITCH_SHIFT, restored.pitchMode());
-        assertEquals(3, loaded.hits().size());
-        assertEquals(List.of(0.0, 4.0, 7.0), loaded.hits().stream().map(Beat.Hit::pitch).toList());
-        assertEquals(List.of(0.5, 0.5, 0.75), loaded.hits().stream().map(Beat.Hit::length).toList());
+        assertEquals(4, loaded.hits().size());
+        assertEquals(List.of(0.0, 4.0, 7.0, 12.0),
+                loaded.hits().stream().map(Beat.Hit::pitch).toList());
+        assertEquals(List.of(0.5, 0.5, 0.75, 1.0),
+                loaded.hits().stream().map(Beat.Hit::length).toList());
+        assertEquals(5.5, loaded.hits().get(3).beat(), 0.00001);
     }
 
     @Test void damagedChordLengthIsRejectedWithoutLoading() throws Exception {
@@ -175,6 +181,7 @@ class ProjectIOTest {
         assertEquals(Beat.Instrument.DRUM, track.instrument());
         assertEquals(38, track.baseMidiNote());
         assertFalse(track.formantPreserve());
+        assertTrue(track.repeat());
         assertEquals(Beat.PitchMode.PITCH_SHIFT, track.pitchMode());
         assertEquals(3, track.pitch(), 0.00001);
         assertEquals(5, loaded.hits().get(0).pitch(), 0.00001);

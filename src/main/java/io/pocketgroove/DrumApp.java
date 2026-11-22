@@ -48,6 +48,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.EnumSet;
 import java.util.List;
@@ -120,6 +121,12 @@ public final class DrumApp extends Application {
     private boolean busy;
     private boolean recording;
     private boolean playing;
+    private int recordingTrack = -1;
+    private double recordingBarStart;
+    private int selectedBar;
+    private boolean barSelected;
+    private double sequencerWindowStart;
+    private Clipboard clipboard;
     private boolean dirty;
     private boolean restoring = true;
     private boolean learning;
@@ -149,7 +156,12 @@ public final class DrumApp extends Application {
         arrangement.setOnAudition(this::hit);
         arrangement.setOnTrackEdit(this::openPianoRoll);
         arrangement.setOnPitchModeChanged(this::changeTrackPitchMode);
-        arrangement.setOnEditBeat(beat -> selectStep((int) Math.round(beat * Pattern.STEPS_PER_BEAT)));
+        arrangement.setOnBarSelected(this::selectBar);
+        arrangement.setOnDeleteSelection(this::deleteSelectedBars);
+        arrangement.setOnCopySelection(this::copySelectedBars);
+        arrangement.setOnPasteAtBar(this::pasteBarsAt);
+        arrangement.setOnRepeatChanged(this::setTrackRepeat);
+        arrangement.setOnEditBeat(beat -> selectBeat(beat));
         sequencer = new StepSequencerView();
         sequencer.setHandlers(this::patternEdited, this::selectStepFromSequencer);
 
@@ -315,11 +327,12 @@ public final class DrumApp extends Application {
             @Override public Integer fromString(String text) { return Integer.valueOf(text.replace(" BAR", "")); }
             @Override public String toString(Integer value) { return value == null ? "" : value + " BAR"; }
         });
-        loopBars.setAccessibleText("루프 길이");
+        loopBars.setAccessibleText("반복 트랙 패턴 길이");
+        loopBars.setTooltip(new Tooltip("반복 트랙의 패턴 길이입니다. 곡 전체 길이는 BARS에서 정합니다."));
         loopBars.valueProperty().addListener((o, a, bars) -> {
             if (!restoring && bars != null) changeLoopLength(bars);
         });
-        var loopBox = field("LOOP", loopBars);
+        var loopBox = field("PATTERN", loopBars);
         loopBox.setMinWidth(82);
 
         songBars = new Spinner<>(1, 512, 16);
@@ -328,7 +341,7 @@ public final class DrumApp extends Application {
         songBars.setPrefWidth(70);
         songBars.setMaxWidth(70);
         songBars.setAccessibleText("전체 마디 수");
-        songBars.setTooltip(new Tooltip("곡 전체 길이입니다. 늘리면 기본 패턴이 그대로 반복됩니다."));
+        songBars.setTooltip(new Tooltip("곡 전체 길이입니다. 반복 트랙은 패턴이 반복되고, 개별 마디 트랙은 빈 마디가 늘어납니다."));
         configureSpinnerEditor(songBars);
         songBars.valueProperty().addListener((o, a, bars) -> {
             if (!restoring && bars != null) changeSongBars(bars);
@@ -547,8 +560,7 @@ public final class DrumApp extends Application {
         arrangement.setSelectedTrack(selectedTrack);
         updateTrackHeader();
         updateTrackPitchEditor();
-        sequencer.setData(selectedTrack, tracks.get(selectedTrack), hits, length);
-        sequencer.setSelectedStep(selectedStep);
+        refreshSequencer();
         syncControlState();
     }
 
@@ -559,6 +571,24 @@ public final class DrumApp extends Application {
     void openPianoRollForTest(int index) { openPianoRoll(index); }
 
     boolean pianoRollShowingForTest() { return pianoRoll != null && pianoRoll.isShowing(); }
+
+    void setTrackRepeatForTest(int index, boolean repeat) { setTrackRepeat(index, repeat); }
+
+    void setBarSelectionForTest(int firstTrack, int firstBar, int lastTrack, int lastBar) {
+        arrangement.setSelectionForTest(firstTrack, firstBar, lastTrack, lastBar);
+    }
+
+    void deleteSelectedBarsForTest() { deleteSelectedBars(); }
+
+    void copyBarsForTest() { copySelectedBars(); }
+
+    void pasteBarsAtForTest(int bar) { pasteBarsAt(bar); }
+
+    List<Beat.Track> tracksForTest() { return tracks; }
+
+    List<Beat.Hit> hitsForTest() { return hits; }
+
+    int projectBarsForTest() { return projectBars; }
 
     private void openPianoRoll(int index) {
         if (busy || recording || index < 0 || index >= tracks.size()) return;
@@ -572,7 +602,8 @@ public final class DrumApp extends Application {
             return;
         }
         selectTrack(index);
-        pianoRoll = PianoRollDialog.show(stage, track, index, hits, length, pitch.getValue(),
+        double rollBeats = track.repeat() ? length : projectBars * 4.0;
+        pianoRoll = PianoRollDialog.show(stage, track, index, hits, rollBeats, pitch.getValue(),
                 updated -> applyPianoRoll(index, updated),
                 (base, formant) -> applyMelodySettings(index, base, formant));
     }
@@ -583,8 +614,8 @@ public final class DrumApp extends Application {
         hits = List.copyOf(updated);
         markDirty();
         arrangement.setData(tracks, hits, length, projectBars, selectedTrack,
-                Pattern.stepBeat(selectedStep));
-        sequencer.setData(selectedTrack, tracks.get(selectedTrack), hits, length);
+                sequencerWindowStart + Pattern.stepBeat(selectedStep));
+        refreshSequencer();
         scheduleLoopSync();
         schedulePitchRefresh();
         status.setText("음표를 편집했습니다 · " + hits.size() + " notes");
@@ -671,15 +702,265 @@ public final class DrumApp extends Application {
     }
 
     private void selectStep(int step) {
-        int max = Math.max(0, Pattern.stepCount(length) - 1);
+        int max = Math.max(0, sequencerStepCount() - 1);
         selectedStep = Math.max(0, Math.min(max, step));
-        arrangement.setEditBeat(Pattern.stepBeat(selectedStep));
+        arrangement.setEditBeat(sequencerWindowStart + Pattern.stepBeat(selectedStep));
         sequencer.setSelectedStep(selectedStep);
+    }
+
+    private int sequencerStepCount() {
+        if (tracks.isEmpty()) return 16;
+        var track = tracks.get(selectedTrack);
+        return Pattern.stepCount(track.repeat() ? length : 4.0);
+    }
+
+    private void selectBeat(double beat) {
+        if (tracks.isEmpty()) return;
+        int absoluteStep = (int) Math.round(beat * Pattern.STEPS_PER_BEAT);
+        selectedBar = Math.max(0, Math.min(projectBars - 1, absoluteStep / 16));
+        barSelected = true;
+        var track = tracks.get(selectedTrack);
+        if (track.repeat()) {
+            selectedStep = Math.floorMod(absoluteStep, Pattern.stepCount(length));
+            sequencerWindowStart = 0;
+        } else {
+            selectedStep = Math.floorMod(absoluteStep, 16);
+            sequencerWindowStart = selectedBar * 4.0;
+        }
+        arrangement.setSelectedBar(selectedBar);
+        refreshSequencer();
+        arrangement.setEditBeat(sequencerWindowStart + Pattern.stepBeat(selectedStep));
+    }
+
+    private void refreshSequencer() {
+        if (tracks.isEmpty()) return;
+        var track = tracks.get(selectedTrack);
+        double windowStart = track.repeat() ? 0 : selectedBar * 4.0;
+        if (windowStart < 0 || windowStart >= projectBars * 4.0) {
+            selectedBar = Math.max(0, Math.min(projectBars - 1, selectedBar));
+            windowStart = track.repeat() ? 0 : selectedBar * 4.0;
+        }
+        double windowLength = track.repeat() ? length
+                : Math.max(0.25, Math.min(4.0, projectBars * 4.0 - windowStart));
+        sequencerWindowStart = windowStart;
+        selectedStep = Math.max(0, Math.min(Pattern.stepCount(windowLength) - 1, selectedStep));
+        sequencer.setData(selectedTrack, track, hits, windowLength, windowStart);
+        sequencer.setSelectedStep(selectedStep);
+    }
+
+    private void selectBar(int bar) {
+        if (bar < 0) {
+            barSelected = false;
+            selectedBar = -1;
+            arrangement.setSelectedBar(-1);
+            return;
+        }
+        selectedBar = Math.max(0, Math.min(projectBars - 1, bar));
+        barSelected = true;
+        arrangement.setSelectedBar(selectedBar);
+        if (!tracks.isEmpty() && !tracks.get(selectedTrack).repeat()) {
+            selectedStep = Math.min(selectedStep, 15);
+        }
+        refreshSequencer();
+    }
+
+    private record Clipboard(String trackKey, int barCount,
+                             List<List<Beat.Hit>> bars) {}
+
+    private void deleteSelectedBars() {
+        if (busy || recording || tracks.isEmpty()) return;
+        var selection = arrangement.selection();
+        if (selection == null && barSelected && selectedBar >= 0) {
+            selection = new ArrangementView.BarSelection(selectedTrack, selectedTrack,
+                    selectedBar, selectedBar);
+        }
+        if (selection == null) {
+            status.setText("삭제할 마디를 선택하세요.");
+            return;
+        }
+        remember(projectSnapshot(), selectedTrack, selectedStep, "delete-bars");
+        var ranges = new ArrayList<int[]>();
+        int patternBars = Math.max(1, (int) Math.round(length / 4.0));
+        for (int trackIndex = selection.firstTrack(); trackIndex <= selection.lastTrack(); trackIndex++) {
+            var track = tracks.get(trackIndex);
+            for (int bar = selection.firstBar(); bar <= selection.lastBar(); bar++) {
+                int patternBar = track.repeat() ? Math.floorMod(bar, patternBars) : bar;
+                int start = patternBar * 16;
+                ranges.add(new int[]{trackIndex, start, start + 16});
+            }
+        }
+        hits = hits.stream().filter(hit -> {
+            int step = (int) Math.round(hit.beat() * 4);
+            for (var range : ranges) {
+                if (hit.track() == range[0] && step >= range[1] && step < range[2]) return false;
+            }
+            return true;
+        }).toList();
+        markDirty();
+        refreshUi();
+        scheduleLoopSync();
+        schedulePitchRefresh();
+        status.setText("선택한 마디의 패턴을 지웠습니다.");
+    }
+
+    private void copySelectedBars() {
+        if (busy || recording || tracks.isEmpty()) return;
+        var selection = arrangement.selection();
+        if (selection == null || !selection.singleTrack()) {
+            status.setText("복사는 한 트랙 안에서만 가능합니다.");
+            return;
+        }
+        int trackIndex = selection.firstTrack();
+        var track = tracks.get(trackIndex);
+        if (track.repeat()) {
+            status.setText("반복 트랙은 반복을 끈 뒤 복사할 수 있습니다.");
+            return;
+        }
+        var bars = new ArrayList<List<Beat.Hit>>();
+        for (int bar = selection.firstBar(); bar <= selection.lastBar(); bar++) {
+            var local = new ArrayList<Beat.Hit>();
+            for (var hit : SongTimeline.barHits(tracks, hits, trackIndex, bar, length)) {
+                local.add(new Beat.Hit(trackIndex, hit.beat() - bar * 4.0,
+                        hit.velocity(), hit.pitch(), hit.length()));
+            }
+            bars.add(List.copyOf(local));
+        }
+        clipboard = new Clipboard(track.key(), bars.size(), List.copyOf(bars));
+        status.setText(selection.barCount() + "마디를 복사했습니다.");
+    }
+
+    private void pasteBarsAt(int bar) {
+        if (busy || recording || clipboard == null) {
+            if (clipboard == null) status.setText("먼저 마디를 복사하세요.");
+            return;
+        }
+        int targetIndex = -1;
+        for (int i = 0; i < tracks.size(); i++) {
+            if (tracks.get(i).key().equals(clipboard.trackKey())) {
+                targetIndex = i;
+                break;
+            }
+        }
+        if (targetIndex < 0) {
+            status.setText("복사한 트랙을 찾을 수 없습니다.");
+            return;
+        }
+        var track = tracks.get(targetIndex);
+        if (track.repeat()) {
+            status.setText("반복 트랙은 반복을 끈 뒤 붙여넣기 할 수 있습니다.");
+            return;
+        }
+        int targetBar = bar >= 0 ? Math.min(bar, projectBars - 1)
+                : lastPatternBar(targetIndex) + 1;
+        if (targetBar < 0) targetBar = 0;
+        remember(projectSnapshot(), targetIndex, selectedStep, "paste-bars");
+        double insertion = targetBar * 4.0;
+        double shift = clipboard.barCount() * 4.0;
+        var merged = new ArrayList<Beat.Hit>();
+        for (var hit : hits) {
+            if (hit.track() == targetIndex && hit.beat() >= insertion - 1e-9) {
+                merged.add(new Beat.Hit(targetIndex, hit.beat() + shift,
+                        hit.velocity(), hit.pitch(), hit.length()));
+            } else {
+                merged.add(hit);
+            }
+        }
+        for (int i = 0; i < clipboard.bars().size(); i++) {
+            for (var hit : clipboard.bars().get(i)) {
+                merged.add(new Beat.Hit(targetIndex, insertion + i * 4.0 + hit.beat(),
+                        hit.velocity(), hit.pitch(), hit.length()));
+            }
+        }
+        merged.sort(Comparator.comparingDouble(Beat.Hit::beat)
+                .thenComparingInt(Beat.Hit::track)
+                .thenComparingDouble(Beat.Hit::pitch));
+        if (merged.size() > 100_000) {
+            status.setText("붙여넣은 뒤 타격이 너무 많아집니다. 범위를 줄이세요.");
+            return;
+        }
+        final int target = targetIndex;
+        double maxBeat = merged.stream().filter(hit -> hit.track() == target)
+                .mapToDouble(Beat.Hit::beat).max().orElse(insertion);
+        int neededBars = Math.max(projectBars,
+                Math.max(targetBar + clipboard.barCount(),
+                        (int) Math.ceil((maxBeat + 1e-9) / 4.0)));
+        if (neededBars > 512) {
+            status.setText("512마디를 넘어 붙여넣을 수 없습니다.");
+            return;
+        }
+        projectBars = Math.max(1, neededBars);
+        hits = List.copyOf(merged);
+        selectedBar = targetBar;
+        barSelected = true;
+        arrangement.setSelectedBar(targetBar);
+        markDirty();
+        refreshUi();
+        scheduleLoopSync();
+        schedulePitchRefresh();
+        status.setText(clipboard.barCount() + "마디를 " + (targetBar + 1) + "마디에 삽입했습니다.");
+    }
+
+    private int lastPatternBar(int trackIndex) {
+        int last = -1;
+        for (var hit : hits) {
+            if (hit.track() == trackIndex) last = Math.max(last, (int) Math.floor(hit.beat() / 4.0));
+        }
+        return last;
+    }
+
+    private void setTrackRepeat(int index, boolean repeat) {
+        if (index < 0 || index >= tracks.size()) return;
+        var old = tracks.get(index);
+        if (old.repeat() == repeat) return;
+        remember(projectSnapshot(), selectedTrack, selectedStep, "repeat");
+        var updated = new ArrayList<>(tracks);
+        updated.set(index, old.withRepeat(repeat));
+        var nextHits = new ArrayList<Beat.Hit>();
+        if (!repeat) {
+            int patternBars = Math.max(1, (int) Math.round(length / 4.0));
+            for (var hit : hits) if (hit.track() != index) nextHits.add(hit);
+            for (int bar = 0; bar < projectBars; bar++) {
+                final int currentBar = bar;
+                boolean barHasHits = hits.stream().anyMatch(hit -> hit.track() == index
+                        && hit.beat() >= currentBar * 4.0 && hit.beat() < currentBar * 4.0 + 4.0);
+                if (barHasHits) {
+                    for (var hit : hits) {
+                        if (hit.track() == index && hit.beat() >= bar * 4.0
+                                && hit.beat() < bar * 4.0 + 4.0) nextHits.add(hit);
+                    }
+                    continue;
+                }
+                int patternBar = Math.floorMod(bar, patternBars);
+                for (var hit : hits) {
+                    if (hit.track() != index || hit.beat() < patternBar * 4.0
+                            || hit.beat() >= patternBar * 4.0 + 4.0) continue;
+                    nextHits.add(new Beat.Hit(index, bar * 4.0
+                            + (hit.beat() - patternBar * 4.0),
+                            hit.velocity(), hit.pitch(), hit.length()));
+                }
+            }
+        } else {
+            nextHits.addAll(hits);
+        }
+        nextHits.sort(Comparator.comparingDouble(Beat.Hit::beat)
+                .thenComparingInt(Beat.Hit::track)
+                .thenComparingDouble(Beat.Hit::pitch));
+        if (nextHits.size() > 100_000) {
+            status.setText("마디를 펼치면 타격이 너무 많아집니다. 곡 마디 수를 줄이세요.");
+            return;
+        }
+        tracks = List.copyOf(updated);
+        hits = List.copyOf(nextHits);
+        markDirty();
+        refreshUi();
+        scheduleLoopSync();
+        schedulePitchRefresh();
+        status.setText(old.name() + " · 반복 " + (repeat ? "예" : "아니오"));
     }
 
     private void selectStepFromSequencer(int step) {
         selectedStep = step;
-        arrangement.setEditBeat(Pattern.stepBeat(selectedStep));
+        arrangement.setEditBeat(sequencerWindowStart + Pattern.stepBeat(selectedStep));
     }
 
     private void patternEdited(List<Beat.Hit> updated) {
@@ -687,7 +968,8 @@ public final class DrumApp extends Application {
         remember(projectSnapshot(), selectedTrack, selectedStep, "steps");
         hits = List.copyOf(updated);
         markDirty();
-        arrangement.setData(tracks, hits, length, projectBars, selectedTrack, Pattern.stepBeat(selectedStep));
+        arrangement.setData(tracks, hits, length, projectBars, selectedTrack,
+                sequencerWindowStart + Pattern.stepBeat(selectedStep));
         scheduleLoopSync();
         schedulePitchRefresh();
         status.setText("스텝을 편집했습니다 · " + hits.size() + " hits");
@@ -714,7 +996,8 @@ public final class DrumApp extends Application {
         var project = projectSnapshot();
         io.submit(() -> {
             try {
-                var result = pitchCache.prepare(project.tracks(), project.hits(), project.pitch());
+                var result = pitchCache.prepare(project.tracks(), SongTimeline.expand(project),
+                        project.pitch());
                 Platform.runLater(() -> {
                     if (closed || generation != pitchGeneration) return;
                     if (result.rendered() <= 0) return;
@@ -740,14 +1023,15 @@ public final class DrumApp extends Application {
     private void syncLoopNow() {
         var engine = audio;
         if (engine == null || tracks.isEmpty()) return;
-        var snapshot = List.copyOf(hits);
-        double snapshotLength = length;
+        var project = projectSnapshot();
+        var snapshot = SongTimeline.expand(project);
+        double snapshotLength = project.songBeats();
         int snapshotBpm = bpm == null ? 100 : bpm.getValue();
         io.submit(() -> {
             try {
                 engine.setLoop(snapshot, snapshotLength, snapshotBpm);
             } catch (Exception e) {
-                Platform.runLater(() -> status.setText("스텝 변경을 오디오에 반영하지 못했습니다."));
+                Platform.runLater(() -> status.setText("변경 사항을 오디오에 반영하지 못했습니다."));
             }
         });
     }
@@ -756,16 +1040,28 @@ public final class DrumApp extends Application {
         if (recording || playing || busy) return;
         double next = bars * 4.0;
         if (Math.abs(next - length) < 0.0001) return;
-        var outside = hits.stream().filter(h -> h.beat() >= next).toList();
-        if (!outside.isEmpty() && !confirm("루프 길이 변경", outside.size()
-                + "개의 타격이 새 루프 밖으로 나갑니다. 잘라낼까요?")) {
+        var outside = hits.stream().filter(h -> {
+            if (h.beat() >= next) {
+                var track = tracks.get(h.track());
+                return track.repeat();
+            }
+            return false;
+        }).toList();
+        if (!outside.isEmpty() && !confirm("패턴 길이 변경", outside.size()
+                + "개의 타격이 새 패턴 밖으로 나갑니다. 잘라낼까요?")) {
             restoring = true;
             loopBars.setValue((int) Math.max(1, Math.round(length / 4)));
             restoring = false;
             return;
         }
         remember(projectSnapshot(), selectedTrack, selectedStep, "loop-length");
-        hits = Pattern.clampToLength(hits, next);
+        final double oldLength = length;
+        final double limit = next;
+        hits = hits.stream().filter(h -> {
+            if (!tracks.get(h.track()).repeat()) return true;
+            if (h.beat() >= oldLength) return true; // non-active per-bar data is preserved
+            return h.beat() < limit;
+        }).toList();
         length = next;
         projectBars = Math.max(projectBars, (int) Math.ceil(length / 4.0));
         selectedStep = Math.min(selectedStep, Math.max(0, Pattern.stepCount(length) - 1));
@@ -777,6 +1073,9 @@ public final class DrumApp extends Application {
     private void changeSongBars(int bars) {
         if (busy || recording) return;
         int minimum = (int) Math.ceil(length / 4.0);
+        for (var hit : hits) {
+            minimum = Math.max(minimum, (int) Math.floor(hit.beat() / 4.0) + 1);
+        }
         int next = Math.max(minimum, Math.min(512, bars));
         if (next == projectBars) {
             if (songBars.getValue() != next) {
@@ -784,13 +1083,15 @@ public final class DrumApp extends Application {
                 songBars.getValueFactory().setValue(next);
                 restoring = false;
             }
+            if (bars < minimum) status.setText(
+                    "기존 마디 데이터가 있어 " + minimum + "마디까지 줄일 수 없습니다.");
             return;
         }
         remember(projectSnapshot(), selectedTrack, selectedStep, "song-bars");
         projectBars = next;
         markDirty();
         refreshUi();
-        status.setText("전체 " + projectBars + "마디 · 기본 패턴이 그대로 반복됩니다.");
+        status.setText("전체 " + projectBars + "마디로 변경했습니다.");
     }
 
     private void updateTrackHeader() {
@@ -811,14 +1112,14 @@ public final class DrumApp extends Application {
     }
 
     private void refreshUi() {
-        int maxStep = Math.max(0, Pattern.stepCount(length) - 1);
-        selectedStep = Math.max(0, Math.min(maxStep, selectedStep));
         selectedTrack = tracks.isEmpty() ? 0 : Math.max(0, Math.min(tracks.size() - 1, selectedTrack));
-        arrangement.setData(tracks, hits, length, projectBars, selectedTrack, Pattern.stepBeat(selectedStep));
+        arrangement.setData(tracks, hits, length, projectBars, selectedTrack,
+                sequencerWindowStart + Pattern.stepBeat(selectedStep));
+        arrangement.setSelectedBar(selectedBar);
         if (!tracks.isEmpty()) {
-            sequencer.setData(selectedTrack, tracks.get(selectedTrack), hits, length);
-            sequencer.setSelectedStep(selectedStep);
+            refreshSequencer();
         }
+        arrangement.setEditBeat(sequencerWindowStart + Pattern.stepBeat(selectedStep));
         restoring = true;
         int bars = (int) Math.max(1, Math.round(length / 4.0));
         if (!loopBars.getItems().contains(bars)) loopBars.getItems().add(bars);
@@ -883,6 +1184,9 @@ public final class DrumApp extends Application {
         remember(projectSnapshot(), selectedTrack, selectedStep, "record");
         cancelLearning();
         stopEverythingQuietly();
+        recordingTrack = selectedTrack;
+        var recordTrack = tracks.get(selectedTrack);
+        recordingBarStart = recordTrack.repeat() ? 0 : selectedBar * 4.0;
         try {
             audio.record(selectedTrack, length, bpm.getValue());
         } catch (RuntimeException e) {
@@ -944,7 +1248,7 @@ public final class DrumApp extends Application {
         playing = true;
         arrangement.updatePlayhead(0, true);
         sequencer.setPlayhead(0, true);
-        status.setText("반복 재생 중 · BPM과 피치를 조절할 수 있습니다.");
+        status.setText("재생 중 · BPM과 피치를 조절할 수 있습니다.");
         syncControlState();
     }
 
@@ -958,8 +1262,7 @@ public final class DrumApp extends Application {
             playing = state.playing();
             if (wasRecording && !recording) {
                 captureNativeRecording();
-                status.setText(hits.isEmpty() ? "녹음된 타격이 없습니다."
-                        : "녹음 완료 · 반복 재생 중입니다.");
+                status.setText(hits.isEmpty() ? "녹음된 타격이 없습니다." : "녹음 완료 · 재생 중입니다.");
             }
             position.setText(positionText(state.position()));
             arrangement.updatePlayhead(state.position(), playing || recording);
@@ -982,13 +1285,27 @@ public final class DrumApp extends Application {
     private void captureNativeRecording() {
         if (audio == null || audio.state().recording()) return;
         try {
+            int recordedTrack = recordingTrack >= 0 ? recordingTrack : selectedTrack;
             var captured = audio.snapshot();
-            hits = captured.hits();
-            length = captured.length();
+            var track = tracks.get(recordedTrack);
+            double offset = track.repeat() ? 0 : recordingBarStart;
+            double limit = track.repeat() ? length : projectBars * 4.0;
+            var recorded = new ArrayList<Beat.Hit>();
+            for (var hit : captured.hits()) {
+                if (hit.track() != recordedTrack) continue;
+                double beat = hit.beat() + offset;
+                if (beat >= limit) continue;
+                recorded.add(new Beat.Hit(recordedTrack, beat, hit.velocity(), hit.pitch(), hit.length()));
+            }
+            var merged = new ArrayList<Beat.Hit>();
+            for (var hit : hits) if (hit.track() != recordedTrack) merged.add(hit);
+            merged.addAll(recorded);
+            hits = List.copyOf(merged);
             selectedStep = Math.min(selectedStep, Math.max(0, Pattern.stepCount(length) - 1));
             refreshUi();
             markDirty();
             schedulePitchRefresh();
+            syncLoopNow();
         } catch (Exception e) {
             status.setText("녹음 내용을 읽지 못했습니다.");
         }
@@ -1302,8 +1619,10 @@ public final class DrumApp extends Application {
                 var typed = instrument == Beat.Instrument.MELODY
                         ? imported.withInstrument(Beat.Instrument.MELODY, 60)
                                 .withPitchMode(Beat.PitchMode.PITCH_SHIFT)
+                                .withRepeat(false)
                         : imported.withInstrument(Beat.Instrument.DRUM,
-                                MidiExporter.baseNote(imported.name(), trackIndex));
+                                MidiExporter.baseNote(imported.name(), trackIndex))
+                                .withRepeat(true);
                 if (!askTrim) {
                     Platform.runLater(() -> {
                         setBusy(false, "");
@@ -1480,7 +1799,7 @@ public final class DrumApp extends Application {
             pitch.getValueFactory().setValue((int) Math.round(project.pitch()));
             restoring = false;
             try {
-                audio.setLoop(hits, length, project.bpm());
+                audio.setLoop(SongTimeline.expand(project), project.songBeats(), project.bpm());
                 audio.parameters(master.getValue(), project.pitch());
             } catch (Exception e) {
                 status.setText("되돌린 편집을 오디오에 반영하지 못했습니다.");
@@ -1616,9 +1935,11 @@ public final class DrumApp extends Application {
             var pitches = project.tracks().stream().map(Beat.Track::pitch).toList();
             var modes = project.tracks().stream()
                     .map(track -> track.pitchMode() == Beat.PitchMode.PITCH_SHIFT).toList();
-            var variants = pitchCache.prepare(project.tracks(), project.hits(), project.pitch(), pcm);
-            engine.install(pcm, pitches, modes, project.hits(), project.length(), project.bpm(),
-                    variants.tracks());
+            var songHits = SongTimeline.expand(project);
+            var variants = pitchCache.prepare(project.tracks(), songHits,
+                    project.pitch(), pcm);
+            engine.install(pcm, pitches, modes, songHits, project.songBeats(),
+                    project.bpm(), variants.tracks());
             return new Prepared(project, engine, found, created, variants.missing());
         } catch (Exception e) {
             if (created) engine.close();
@@ -1642,8 +1963,10 @@ public final class DrumApp extends Application {
         projectBars = project.bars();
         selectedTrack = Math.max(0, Math.min(tracks.size() - 1, select));
         selectedStep = 0;
-        currentFile = path;
-        this.dirty = dirtyAfter;
+        selectedBar = 0;
+        barSelected = false;
+        arrangement.clearSelection();
+        currentFile = path;        this.dirty = dirtyAfter;
         restoring = true;
         bpm.getValueFactory().setValue((int) Math.round(project.bpm()));
         pitch.getValueFactory().setValue((int) Math.round(project.pitch()));
@@ -1736,7 +2059,11 @@ public final class DrumApp extends Application {
                     var pitches = project.tracks().stream().map(Beat.Track::pitch).toList();
                     var modes = project.tracks().stream()
                             .map(track -> track.pitchMode() == Beat.PitchMode.PITCH_SHIFT).toList();
-                    engine.install(pcm, pitches, modes, project.hits(), project.length(), project.bpm());
+                    var songHits = SongTimeline.expand(project);
+                    var variants = pitchCache.prepare(project.tracks(), songHits,
+                            project.pitch(), pcm);
+                    engine.install(pcm, pitches, modes, songHits, project.songBeats(),
+                            project.bpm(), variants.tracks());
                 } catch (Exception e) {
                     if (created) engine.close();
                     throw e;

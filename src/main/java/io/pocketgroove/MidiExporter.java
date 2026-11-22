@@ -52,23 +52,18 @@ final class MidiExporter {
             var writer = new EventWriter();
             writer.meta(0, 0x03, track.name().getBytes(StandardCharsets.UTF_8));
             var events = new ArrayList<NoteEvent>();
-            int firstCycle = (int) Math.floor(startBeat / project.length());
-            int lastCycle = (int) Math.ceil(endBeat / project.length());
-            for (int cycle = firstCycle; cycle <= lastCycle; cycle++) {
-                double cycleStart = cycle * project.length();
-                for (var hit : project.hits()) {
-                    if (hit.track() != trackIndex) continue;
-                    double beat = cycleStart + hit.beat();
-                    if (beat < startBeat - 1e-9 || beat >= endBeat - 1e-9) continue;
-                    int tick = (int) Math.round((beat - startBeat) * DIVISION);
-                    int pitch = (int) Math.round(project.pitch() + track.pitch() + hit.pitch());
-                    int note = clamp(track.baseMidiNote() + pitch);
-                    int velocity = Math.max(1, Math.min(127, (int) Math.round(hit.velocity() * 127)));
-                    int lengthTicks = Math.max(1, (int) Math.round(hit.length() * DIVISION));
-                    int offTick = Math.min(endTick, tick + lengthTicks);
-                    events.add(new NoteEvent(tick, true, note, velocity, channel));
-                    events.add(new NoteEvent(offTick, false, note, 0, channel));
-                }
+            for (var hit : SongTimeline.expand(project.tracks(), project.hits(),
+                    project.length(), project.bars())) {
+                if (hit.track() != trackIndex) continue;
+                if (hit.beat() < startBeat - 1e-9 || hit.beat() >= endBeat - 1e-9) continue;
+                int tick = (int) Math.round((hit.beat() - startBeat) * DIVISION);
+                int pitch = (int) Math.round(project.pitch() + track.pitch() + hit.pitch());
+                int note = clamp(track.baseMidiNote() + pitch);
+                int velocity = Math.max(1, Math.min(127, (int) Math.round(hit.velocity() * 127)));
+                int lengthTicks = Math.max(1, (int) Math.round(hit.length() * DIVISION));
+                int offTick = Math.min(endTick, tick + lengthTicks);
+                events.add(new NoteEvent(tick, true, note, velocity, channel));
+                events.add(new NoteEvent(offTick, false, note, 0, channel));
             }
             events.sort(Comparator.comparingInt(NoteEvent::tick)
                     .thenComparing(event -> event.on ? 1 : 0)

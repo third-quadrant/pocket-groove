@@ -40,15 +40,14 @@ final class PitchCache {
         if (!Double.isFinite(projectPitch) || projectPitch < -12 || projectPitch > 12)
             throw new IllegalArgumentException("전체 피치가 올바르지 않습니다.");
         syncSources(tracks, decoded);
-        var needed = new LinkedHashMap<Integer, List<Integer>>();
-        for (int i = 0; i < tracks.size(); i++) needed.put(i, new ArrayList<>());
+        var needed = new LinkedHashMap<Integer, java.util.LinkedHashSet<Integer>>();
+        for (int i = 0; i < tracks.size(); i++) needed.put(i, new java.util.LinkedHashSet<>());
         for (var hit : hits) {
             if (hit.track() < 0 || hit.track() >= tracks.size()) continue;
             var track = tracks.get(hit.track());
             if (track.pitchMode() != Beat.PitchMode.PITCH_SHIFT) continue;
             int tenth = tenth(projectPitch + track.pitch() + hit.pitch());
-            var list = needed.get(hit.track());
-            if (!list.contains(tenth)) list.add(tenth);
+            needed.get(hit.track()).add(tenth);
         }
         for (int i = 0; i < tracks.size(); i++) {
             if (tracks.get(i).pitchMode() == Beat.PitchMode.PITCH_SHIFT

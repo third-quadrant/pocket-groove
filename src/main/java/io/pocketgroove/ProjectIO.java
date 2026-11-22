@@ -6,7 +6,7 @@ import java.util.*;
 import java.util.zip.*;
 
 public final class ProjectIO {
-    private static final int VERSION = 7;
+    private static final int VERSION = 8;
 
     public static void save(Path destination, Beat.Project project) throws IOException {
         Path target = destination.toAbsolutePath();
@@ -31,6 +31,7 @@ public final class ProjectIO {
                     props.setProperty("track." + i + ".instrument", track.instrument().name());
                     props.setProperty("track." + i + ".base", Integer.toString(track.baseMidiNote()));
                     props.setProperty("track." + i + ".formant", Boolean.toString(track.formantPreserve()));
+                    props.setProperty("track." + i + ".repeat", Boolean.toString(track.repeat()));
                     zip.putNextEntry(new ZipEntry("sounds/" + i));
                     zip.write(track.audio());
                     zip.closeEntry();
@@ -89,10 +90,15 @@ public final class ProjectIO {
                         : instrument == Beat.Instrument.MELODY ? 60 : MidiExporter.baseNote(name, i);
                 boolean formant = version >= 7
                         && bool(props, prefix + i + ".formant", "Formant 설정이 올바르지 않습니다.");
+                boolean repeat = version >= 8
+                        ? (props.getProperty(prefix + i + ".repeat") == null
+                                ? instrument == Beat.Instrument.DRUM
+                                : bool(props, prefix + i + ".repeat", "트랙 반복 설정이 올바르지 않습니다."))
+                        : true;
                 tracks.add(new Beat.Track(name, key,
                         props.getProperty(prefix + i + ".format"),
                         read(zip, "sounds/" + i, Beat.MAX_SAMPLE_BYTES),
-                        trackPitch, mode, instrument, base, formant));
+                        trackPitch, mode, instrument, base, formant, repeat));
             }
             int hitCount = integer(props, "hits", "타격 수가 올바르지 않습니다.", 0, 100_000);
             var hits = new ArrayList<Beat.Hit>();

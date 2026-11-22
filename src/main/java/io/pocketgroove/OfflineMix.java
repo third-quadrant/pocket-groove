@@ -35,17 +35,12 @@ final class OfflineMix {
         double startBeat = (startBar - 1) * 4.0, endBeat = endBar * 4.0;
         long totalFrames = totalFrames(project, startBar, endBar);
         var events = new ArrayList<Event>();
-        int firstCycle = (int) Math.floor(startBeat / project.length());
-        int lastCycle = (int) Math.ceil(endBeat / project.length());
-        for (int cycle = firstCycle; cycle <= lastCycle; cycle++) {
-            double cycleStart = cycle * project.length();
-            for (var hit : project.hits()) {
-                double beat = cycleStart + hit.beat();
-                if (beat < startBeat - 1e-9 || beat >= endBeat - 1e-9) continue;
-                long frame = Math.round((beat - startBeat) * 60.0 / project.bpm() * SAMPLE_RATE);
-                if (frame < 0 || frame >= totalFrames) continue;
-                events.add(new Event((int) frame, hit.track(), hit.velocity(), hit.pitch()));
-            }
+        for (var hit : SongTimeline.expand(project.tracks(), project.hits(),
+                project.length(), project.bars())) {
+            if (hit.beat() < startBeat - 1e-9 || hit.beat() >= endBeat - 1e-9) continue;
+            long frame = Math.round((hit.beat() - startBeat) * 60.0 / project.bpm() * SAMPLE_RATE);
+            if (frame < 0 || frame >= totalFrames) continue;
+            events.add(new Event((int) frame, hit.track(), hit.velocity(), hit.pitch()));
         }
         events.sort((a, b) -> Integer.compare(a.frame, b.frame));
         var voices = new ArrayList<Voice>();
@@ -53,26 +48,27 @@ final class OfflineMix {
         long frame = 0;
         float[] buffer = new float[CHUNK * 2];
         while (frame < totalFrames) {
-            while (nextEvent < events.size() && events.get(nextEvent).frame <= frame) {
-                var event = events.get(nextEvent++);
-                var sample = pcm.get(event.track());
-                var track = project.tracks().get(event.track());
-                double pitch = project.pitch() + track.pitch() + event.pitch;
-                double ratio = Math.pow(2.0, pitch / 12.0);
-                double scale = sample.sampleRate() / (double) SAMPLE_RATE;
-                boolean pitchShift = track.pitchMode() == Beat.PitchMode.PITCH_SHIFT;
-                if (pitchShift) {
-                    if (cache == null) throw new IOException(
-                            "Pitch Shift를 렌더링하려면 피치 캐시가 필요합니다.");
-                    int tenth = PitchCache.tenth(pitch);
-                    var prepared = cache.get(event.track(), track, tenth);
-                    voices.add(Voice.prepared(prepared, gain * event.velocity));
-                } else {
-                    voices.add(new Voice(scale * ratio, gain * event.velocity, sample.stereo()));
-                }
-            }
             int fill = (int) Math.min(CHUNK, totalFrames - frame);
             for (int i = 0; i < fill; i++) {
+                long currentFrame = frame + i;
+                while (nextEvent < events.size() && events.get(nextEvent).frame <= currentFrame) {
+                    var event = events.get(nextEvent++);
+                    var sample = pcm.get(event.track());
+                    var track = project.tracks().get(event.track());
+                    double pitch = project.pitch() + track.pitch() + event.pitch;
+                    double ratio = Math.pow(2.0, pitch / 12.0);
+                    double scale = sample.sampleRate() / (double) SAMPLE_RATE;
+                    boolean pitchShift = track.pitchMode() == Beat.PitchMode.PITCH_SHIFT;
+                    if (pitchShift) {
+                        if (cache == null) throw new IOException(
+                                "Pitch Shift를 렌더링하려면 피치 캐시가 필요합니다.");
+                        int tenth = PitchCache.tenth(pitch);
+                        var prepared = cache.get(event.track(), track, tenth);
+                        voices.add(Voice.prepared(prepared, gain * event.velocity));
+                    } else {
+                        voices.add(new Voice(scale * ratio, gain * event.velocity, sample.stereo()));
+                    }
+                }
                 float l = 0, r = 0;
                 for (var voice : voices) {
                     if (voice.finished()) continue;

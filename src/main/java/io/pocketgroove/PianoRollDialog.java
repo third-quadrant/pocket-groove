@@ -11,7 +11,6 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollBar;
 import javafx.scene.control.Slider;
-import javafx.scene.control.Spinner;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.BorderPane;
@@ -81,19 +80,34 @@ final class PianoRollDialog {
         lengthBox.valueProperty().addListener((o, a, value) ->
                 view.setNewNote(value, velocity.getValue()));
 
-        var base = new Spinner<Integer>(0, 127, track.baseMidiNote());
-        base.setEditable(true);
-        base.setPrefWidth(66);
-        base.setTooltip(new javafx.scene.control.Tooltip("이 악기의 기준 MIDI 음 (C4 = 60)"));
+        var base = new javafx.scene.control.TextField(NoteNames.name(track.baseMidiNote()));
+        base.setId("piano-base");
+        base.setPrefWidth(76);
+        base.setTooltip(new javafx.scene.control.Tooltip(
+                "기준 음이름 (C4 = MIDI 60, 예: C4, F#3, Bb5)"));
         var formant = new CheckBox("Formant 보존");
         formant.setSelected(track.formantPreserve());
         formant.setTooltip(new javafx.scene.control.Tooltip("피치를 올려도 악기 고유의 포먼트를 유지합니다."));
-        base.valueProperty().addListener((o, a, value) -> {
-            view.setBaseMidiNote(value);
-            onSettings.accept(value, formant.isSelected());
+        int[] currentBase = {track.baseMidiNote()};
+        Runnable commitBase = () -> {
+            try {
+                int midi = NoteNames.parse(base.getText());
+                base.setText(NoteNames.name(midi));
+                if (midi != currentBase[0]) {
+                    currentBase[0] = midi;
+                    view.setBaseMidiNote(midi);
+                    onSettings.accept(midi, formant.isSelected());
+                }
+            } catch (IllegalArgumentException ex) {
+                base.setText(NoteNames.name(currentBase[0]));
+            }
+        };
+        base.setOnAction(e -> commitBase.run());
+        base.focusedProperty().addListener((o, a, focused) -> {
+            if (!focused) commitBase.run();
         });
         formant.selectedProperty().addListener((o, a, value) ->
-                onSettings.accept(base.getValue(), value));
+                onSettings.accept(currentBase[0], value));
 
         var delete = new Button("선택 삭제");
         delete.getStyleClass().add("action-button");
@@ -304,12 +318,16 @@ final class PianoRollDialog {
             updateFooter();
         }
 
+        private boolean visible(Beat.Hit hit) {
+            return hit.track() == trackIndex && hit.beat() >= 0 && hit.beat() < loopBeats;
+        }
+
         private void updateFooter() {
-            long count = hits.stream().filter(hit -> hit.track() == trackIndex).count();
+            long count = hits.stream().filter(this::visible).count();
             var hit = selectedHit();
             String info = hit == null
                     ? "음표 " + count + "개"
-                    : noteName(midiFor(hit.pitch())) + " · " + lengthLabel(hit.length())
+                    : NoteNames.name(midiFor(hit.pitch())) + " · " + lengthLabel(hit.length())
                             + " · " + Math.round(hit.velocity() * 100) + "%";
             footer.setText(info + "   ·   클릭: 추가 · 드래그: 이동 · 오른쪽 끝: 길이"
                     + " · Del/오른쪽 클릭: 삭제");
@@ -392,7 +410,7 @@ final class PianoRollDialog {
                 if (!black) {
                     gc.setTextAlign(TextAlignment.RIGHT);
                     gc.setFill(offset == 0 ? DawStyle.ACCENT : Color.web("#3B4148"));
-                    gc.fillText(noteName(midi), KEY_W - 9, y + ROW_H / 2 + 3);
+                    gc.fillText(NoteNames.name(midi), KEY_W - 9, y + ROW_H / 2 + 3);
                 }
                 if (offset == 0) {
                     gc.setFill(DawStyle.ACCENT);
@@ -448,7 +466,7 @@ final class PianoRollDialog {
                 gc.fillRect(KEY_W, y + ROW_H - .5, w - KEY_W, pc == 0 ? 1 : .5);
                 if (pc == 0) {
                     gc.setFill(DawStyle.alpha(DawStyle.MUTED, .48));
-                    gc.fillText(noteName(midi), KEY_W + 6, y + ROW_H - 2);
+                    gc.fillText(NoteNames.name(midi), KEY_W + 6, y + ROW_H - 2);
                 }
                 if (hoverPitch == offset) {
                     gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .055));
@@ -481,7 +499,7 @@ final class PianoRollDialog {
             gc.rect(KEY_W, RULER_H, Math.max(0, w - KEY_W), Math.max(0, canvas.getHeight() - RULER_H));
             gc.clip();
             for (var hit : hits) {
-                if (hit.track() != trackIndex) continue;
+                if (!visible(hit)) continue;
                 double x = xForBeat(hit.beat());
                 double width = Math.max(5, hit.length() * Pattern.STEPS_PER_BEAT * stepWidth);
                 if (x + width < KEY_W || x > w) continue;
@@ -510,7 +528,7 @@ final class PianoRollDialog {
                     gc.setFont(DawStyle.display(8));
                     gc.setFill(Color.web("#141619"));
                     gc.setTextAlign(TextAlignment.LEFT);
-                    gc.fillText(noteName(midiFor(hit.pitch())), Math.max(KEY_W, x) + 5,
+                    gc.fillText(NoteNames.name(midiFor(hit.pitch())), Math.max(KEY_W, x) + 5,
                             y + ROW_H - 5);
                 }
             }
@@ -598,7 +616,7 @@ final class PianoRollDialog {
             int pitch = pitchAt(y);
             if (pitch == Integer.MIN_VALUE) return null;
             for (var hit : hits) {
-                if (hit.track() != trackIndex || !close(hit.pitch(), pitch)) continue;
+                if (!visible(hit) || !close(hit.pitch(), pitch)) continue;
                 double left = xForBeat(hit.beat());
                 double right = left + Math.max(4, hit.length() * Pattern.STEPS_PER_BEAT * stepWidth);
                 if (x >= left && x <= right) return hit;
@@ -666,11 +684,6 @@ final class PianoRollDialog {
         private static boolean isBlack(int pitchClass) {
             return pitchClass == 1 || pitchClass == 3 || pitchClass == 6
                     || pitchClass == 8 || pitchClass == 10;
-        }
-
-        private static String noteName(int midi) {
-            String[] names = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-            return names[Math.floorMod(midi, 12)] + (midi / 12 - 1);
         }
     }
 }

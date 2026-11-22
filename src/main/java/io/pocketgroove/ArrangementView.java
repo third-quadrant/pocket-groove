@@ -38,6 +38,11 @@ final class ArrangementView extends Region {
     private Consumer<Integer> onTrackSelected = ignored -> {};
     private IntConsumer onAudition = ignored -> {};
     private IntConsumer onTrackEdit = ignored -> {};
+    private IntConsumer onBarSelected = ignored -> {};
+    private Runnable onDeleteSelection = () -> {};
+    private Runnable onCopySelection = () -> {};
+    private IntConsumer onPasteAtBar = ignored -> {};
+    private BiConsumer<Integer, Boolean> onRepeatChanged = (track, repeat) -> {};
     private DoubleConsumer onEditBeat = ignored -> {};
     private BiConsumer<Integer, Beat.PitchMode> onPitchModeChanged = (track, mode) -> {};
     private double loopBeats = 4;
@@ -45,9 +50,11 @@ final class ArrangementView extends Region {
     private double zoom = 28;
     private double editBeat;
     private double playhead;
-    private double lastPosition;
-    private int playheadCycle;
     private int selectedTrack;
+    private int selectedBar = -1;
+    private int selectionStartTrack = -1, selectionStartBar = -1;
+    private int selectionEndTrack = -1, selectionEndBar = -1;
+    private boolean selecting;
     private int hoverTrack = -1;
     private double hoverBeat;
     private boolean playing;
@@ -81,6 +88,7 @@ final class ArrangementView extends Region {
         });
         canvas.setOnMouseReleased(e -> {
             panning = false;
+            selecting = false;
             canvas.setCursor(javafx.scene.Cursor.DEFAULT);
         });
         canvas.setOnScroll(e -> {
@@ -94,13 +102,24 @@ final class ArrangementView extends Region {
             e.consume();
         });
         setOnKeyPressed(e -> {
-            if (e.getCode() == KeyCode.UP || e.getCode() == KeyCode.DOWN) {
+            if (e.getCode() == KeyCode.DELETE || e.getCode() == KeyCode.BACK_SPACE) {
+                if (selection() != null) onDeleteSelection.run();
+                e.consume();
+            } else if (e.isControlDown() && e.getCode() == KeyCode.C) {
+                onCopySelection.run();
+                e.consume();
+            } else if (e.isControlDown() && e.getCode() == KeyCode.V) {
+                var selection = selection();
+                onPasteAtBar.accept(selection == null ? -1 : selection.firstBar());
+                e.consume();
+            } else if (e.getCode() == KeyCode.UP || e.getCode() == KeyCode.DOWN) {
                 int step = e.getCode() == KeyCode.UP ? -1 : 1;
                 selectTrack(Math.max(0, Math.min(tracks.size() - 1, selectedTrack + step)));
                 e.consume();
             } else if (e.getCode() == KeyCode.LEFT || e.getCode() == KeyCode.RIGHT) {
                 double amount = e.isShiftDown() ? 1 : 0.25;
-                editBeat = clamp(editBeat + (e.getCode() == KeyCode.LEFT ? -amount : amount), 0, loopBeats - 0.01);
+                editBeat = clamp(editBeat + (e.getCode() == KeyCode.LEFT ? -amount : amount), 0,
+                        Math.max(0, bars * 4.0 - 0.01));
                 onEditBeat.accept(editBeat);
                 draw();
                 e.consume();
@@ -114,6 +133,13 @@ final class ArrangementView extends Region {
     void setOnTrackSelected(Consumer<Integer> listener) { onTrackSelected = listener == null ? ignored -> {} : listener; }
     void setOnAudition(IntConsumer listener) { onAudition = listener == null ? ignored -> {} : listener; }
     void setOnTrackEdit(IntConsumer listener) { onTrackEdit = listener == null ? ignored -> {} : listener; }
+    void setOnBarSelected(IntConsumer listener) { onBarSelected = listener == null ? ignored -> {} : listener; }
+    void setOnDeleteSelection(Runnable listener) { onDeleteSelection = listener == null ? () -> {} : listener; }
+    void setOnCopySelection(Runnable listener) { onCopySelection = listener == null ? () -> {} : listener; }
+    void setOnPasteAtBar(IntConsumer listener) { onPasteAtBar = listener == null ? ignored -> {} : listener; }
+    void setOnRepeatChanged(BiConsumer<Integer, Boolean> listener) {
+        onRepeatChanged = listener == null ? (track, repeat) -> {} : listener;
+    }
     void setOnEditBeat(DoubleConsumer listener) { onEditBeat = listener == null ? ignored -> {} : listener; }
     void setOnPitchModeChanged(BiConsumer<Integer, Beat.PitchMode> listener) {
         onPitchModeChanged = listener == null ? (track, mode) -> {} : listener;
@@ -147,7 +173,13 @@ final class ArrangementView extends Region {
         this.loopBeats = Math.max(0.25, loopBeats);
         this.bars = Math.max(1, bars);
         this.selectedTrack = Math.max(0, Math.min(this.tracks.size() - 1, selectedTrack));
-        this.editBeat = clamp(editBeat, 0, this.loopBeats - 0.001);
+        this.selectedBar = this.selectedBar < 0 ? -1
+                : Math.max(0, Math.min(this.bars - 1, this.selectedBar));
+        if (selectionStartBar >= this.bars) selectionStartBar = this.bars - 1;
+        if (selectionEndBar >= this.bars) selectionEndBar = this.bars - 1;
+        if (selectionStartTrack >= this.tracks.size()) selectionStartTrack = this.tracks.size() - 1;
+        if (selectionEndTrack >= this.tracks.size()) selectionEndTrack = this.tracks.size() - 1;
+        this.editBeat = clamp(editBeat, 0, Math.max(0, this.bars * 4.0 - 0.001));
         setAccessibleText("트랙 타임라인, " + this.bars + "마디, " + this.tracks.size() + "개 트랙, 선택 "
                 + (this.tracks.isEmpty() ? "없음" : this.tracks.get(this.selectedTrack).name()));
         updateBars();
@@ -161,6 +193,43 @@ final class ArrangementView extends Region {
         draw();
     }
 
+    void setSelectedBar(int bar) {
+        selectedBar = bar < 0 ? -1 : Math.max(0, Math.min(bars - 1, bar));
+        draw();
+    }
+
+    record BarSelection(int firstTrack, int lastTrack, int firstBar, int lastBar) {
+        boolean empty() { return firstTrack < 0 || firstBar < 0; }
+        boolean singleTrack() { return firstTrack == lastTrack; }
+        int trackCount() { return lastTrack - firstTrack + 1; }
+        int barCount() { return lastBar - firstBar + 1; }
+    }
+
+    BarSelection selection() {
+        if (selectionStartTrack < 0 || selectionStartBar < 0) return null;
+        return new BarSelection(Math.min(selectionStartTrack, selectionEndTrack),
+                Math.max(selectionStartTrack, selectionEndTrack),
+                Math.min(selectionStartBar, selectionEndBar),
+                Math.max(selectionStartBar, selectionEndBar));
+    }
+
+    void setSelectionForTest(int firstTrack, int firstBar, int lastTrack, int lastBar) {
+        selectionStartTrack = selectionEndTrack = Math.max(0, firstTrack);
+        selectionEndTrack = Math.max(0, lastTrack);
+        selectionStartBar = Math.max(0, firstBar);
+        selectionEndBar = Math.max(0, lastBar);
+        selectedBar = firstBar;
+        onBarSelected.accept(firstBar);
+        draw();
+    }
+
+    void clearSelection() {
+        selectionStartTrack = selectionEndTrack = -1;
+        selectionStartBar = selectionEndBar = -1;
+        selectedBar = -1;
+        draw();
+    }
+
     private void ensureTrackVisible(int index) {
         double rows = visibleRows();
         if (index < vertical.getValue()) vertical.setValue(index);
@@ -168,7 +237,7 @@ final class ArrangementView extends Region {
     }
 
     void setEditBeat(double beat) {
-        editBeat = clamp(beat, 0, loopBeats - 0.001);
+        editBeat = clamp(beat, 0, Math.max(0, bars * 4.0 - 0.001));
         draw();
     }
 
@@ -184,18 +253,9 @@ final class ArrangementView extends Region {
     void zoomOut() { zoomAround(zoom / 1.18, canvas.getWidth() / 2); }
 
     void updatePlayhead(double position, boolean playing) {
-        if (playing && !this.playing) {
-            playheadCycle = 0;
-            lastPosition = 0;
-        }
-        if (this.playing && playing && position + 0.01 < lastPosition) {
-            playheadCycle = (playheadCycle + 1) % loopCycles();
-        }
-        playheadCycle = Math.floorMod(playheadCycle, loopCycles());
-        lastPosition = position;
         playhead = position;
         this.playing = playing;
-        if (playing) follow(playheadCycle * loopBeats + playhead);
+        if (playing) follow(playhead);
         draw();
     }
 
@@ -232,6 +292,53 @@ final class ArrangementView extends Region {
         draw();
     }
 
+    private void showBarMenu(int index, int bar, double screenX, double screenY) {
+        var track = tracks.get(index);
+        var repeatMenu = new javafx.scene.control.Menu("반복");
+        var repeatGroup = new ToggleGroup();
+        var repeatYes = new RadioMenuItem("예");
+        var repeatNo = new RadioMenuItem("아니오");
+        repeatYes.setToggleGroup(repeatGroup);
+        repeatNo.setToggleGroup(repeatGroup);
+        repeatYes.setSelected(track.repeat());
+        repeatNo.setSelected(!track.repeat());
+        repeatYes.setOnAction(e -> onRepeatChanged.accept(index, true));
+        repeatNo.setOnAction(e -> onRepeatChanged.accept(index, false));
+        repeatMenu.getItems().addAll(repeatYes, repeatNo);
+
+        var pitchMenu = new javafx.scene.control.Menu("피치 방식");
+        var pitchGroup = new ToggleGroup();
+        var varispeed = new RadioMenuItem("Varispeed (속도 변경)");
+        var pitchShift = new RadioMenuItem("Pitch Shift (음높이만)");
+        varispeed.setToggleGroup(pitchGroup);
+        pitchShift.setToggleGroup(pitchGroup);
+        varispeed.setSelected(track.pitchMode() == Beat.PitchMode.VARISPEED);
+        pitchShift.setSelected(track.pitchMode() == Beat.PitchMode.PITCH_SHIFT);
+        varispeed.setOnAction(e -> onPitchModeChanged.accept(index, Beat.PitchMode.VARISPEED));
+        pitchShift.setOnAction(e -> onPitchModeChanged.accept(index, Beat.PitchMode.PITCH_SHIFT));
+        pitchMenu.getItems().addAll(varispeed, pitchShift);
+
+        var delete = new javafx.scene.control.MenuItem("이 마디 지우기");
+        delete.setOnAction(e -> onDeleteSelection.run());
+        var copy = new javafx.scene.control.MenuItem("복사");
+        var selection = selection();
+        copy.setDisable(selection == null || !selection.singleTrack());
+        copy.setOnAction(e -> onCopySelection.run());
+        var paste = new javafx.scene.control.MenuItem("붙여넣기");
+        paste.setOnAction(e -> onPasteAtBar.accept(bar));
+
+        var menu = new ContextMenu();
+        if (track.instrument() == Beat.Instrument.MELODY) {
+            var edit = new javafx.scene.control.MenuItem("음표 편집…");
+            edit.setOnAction(e -> onTrackEdit.accept(index));
+            menu.getItems().addAll(edit, new SeparatorMenuItem());
+        }
+        menu.getItems().addAll(repeatMenu, pitchMenu, new SeparatorMenuItem(),
+                delete, copy, paste, new SeparatorMenuItem(),
+                new MenuItemHeader("반복: 마디 패턴 공유 / 개별: 마디마다 독립 편집"));
+        menu.show(canvas, screenX, screenY);
+    }
+
     private void showPitchModeMenu(int index, double screenX, double screenY) {
         var track = tracks.get(index);
         var group = new ToggleGroup();
@@ -243,13 +350,24 @@ final class ArrangementView extends Region {
         pitchShift.setSelected(track.pitchMode() == Beat.PitchMode.PITCH_SHIFT);
         varispeed.setOnAction(e -> onPitchModeChanged.accept(index, Beat.PitchMode.VARISPEED));
         pitchShift.setOnAction(e -> onPitchModeChanged.accept(index, Beat.PitchMode.PITCH_SHIFT));
+        var repeatMenu = new javafx.scene.control.Menu("반복");
+        var repeatGroup = new ToggleGroup();
+        var repeatYes = new RadioMenuItem("예");
+        var repeatNo = new RadioMenuItem("아니오");
+        repeatYes.setToggleGroup(repeatGroup);
+        repeatNo.setToggleGroup(repeatGroup);
+        repeatYes.setSelected(track.repeat());
+        repeatNo.setSelected(!track.repeat());
+        repeatYes.setOnAction(e -> onRepeatChanged.accept(index, true));
+        repeatNo.setOnAction(e -> onRepeatChanged.accept(index, false));
+        repeatMenu.getItems().addAll(repeatYes, repeatNo);
         var menu = new ContextMenu();
         if (track.instrument() == Beat.Instrument.MELODY) {
             var edit = new javafx.scene.control.MenuItem("음표 편집…");
             edit.setOnAction(e -> onTrackEdit.accept(index));
             menu.getItems().addAll(edit, new SeparatorMenuItem());
         }
-        menu.getItems().addAll(varispeed, pitchShift,
+        menu.getItems().addAll(repeatMenu, new SeparatorMenuItem(), varispeed, pitchShift,
                 new SeparatorMenuItem(),
                 new MenuItemHeader("길이 유지: 음높이만 변경 / 속도 변경: 피치에 따라 길이도 변경"));
         menu.show(canvas, screenX, screenY);
@@ -277,12 +395,23 @@ final class ArrangementView extends Region {
     private void mousePressed(javafx.scene.input.MouseEvent e) {
         requestFocus();
         int row = trackAt(e.getY());
+        int bar = barAt(e.getX());
         if (e.getButton() == MouseButton.SECONDARY && row >= 0 && e.getX() < HEADER_W) {
             selectTrack(row);
             showPitchModeMenu(row, e.getScreenX(), e.getScreenY());
             return;
         }
-        if (e.getButton() == MouseButton.MIDDLE || e.getButton() == MouseButton.SECONDARY) {
+        if (e.getButton() == MouseButton.SECONDARY && row >= 0 && bar >= 0) {
+            selectTrack(row);
+            selectedBar = bar;
+            selectionStartTrack = selectionEndTrack = row;
+            selectionStartBar = selectionEndBar = bar;
+            onBarSelected.accept(bar);
+            showBarMenu(row, bar, e.getScreenX(), e.getScreenY());
+            draw();
+            return;
+        }
+        if (e.getButton() == MouseButton.MIDDLE) {
             panning = true;
             panX = e.getX();
             panY = e.getY();
@@ -294,8 +423,17 @@ final class ArrangementView extends Region {
         if (e.getButton() != MouseButton.PRIMARY) return;
         if (row >= 0) {
             selectTrack(row);
-            if (e.getX() < HEADER_W) onAudition.accept(row);
-            if (e.getX() >= HEADER_W) {
+            if (e.getX() < HEADER_W) {
+                onAudition.accept(row);
+                onBarSelected.accept(-1);
+                selectionStartTrack = selectionEndTrack = -1;
+                selectionStartBar = selectionEndBar = -1;
+            } else {
+                selecting = true;
+                selectionStartTrack = selectionEndTrack = row;
+                selectionStartBar = selectionEndBar = bar;
+                selectedBar = bar;
+                onBarSelected.accept(bar);
                 editBeat = snap(beatAt(e.getX()));
                 onEditBeat.accept(editBeat);
             }
@@ -307,6 +445,14 @@ final class ArrangementView extends Region {
     }
 
     private void mouseDragged(javafx.scene.input.MouseEvent e) {
+        if (selecting) {
+            int row = trackAt(e.getY());
+            int bar = barAt(e.getX());
+            if (row >= 0) selectionEndTrack = row;
+            if (bar >= 0) selectionEndBar = bar;
+            draw();
+            return;
+        }
         if (panning) {
             horizontal.setValue(clamp(panBeat - (e.getX() - panX) / zoom, 0, horizontal.getMax()));
             vertical.setValue(clamp(panTrack - (e.getY() - panY) / ROW_H, 0, vertical.getMax()));
@@ -321,6 +467,12 @@ final class ArrangementView extends Region {
 
     private double beatAt(double x) {
         return offsetBeat() + Math.max(0, x - HEADER_W) / zoom;
+    }
+
+    private int barAt(double x) {
+        if (x < HEADER_W) return -1;
+        int bar = (int) Math.floor(beatAt(x) / 4.0);
+        return bar < 0 || bar >= bars ? -1 : bar;
     }
 
     private static double snap(double beat) {
@@ -524,46 +676,93 @@ final class ArrangementView extends Region {
 
     private void drawClips(GraphicsContext gc) {
         for (int trackIndex = 0; trackIndex < tracks.size(); trackIndex++) {
-            double y = yForTrack(trackIndex) + 9;
-            double rowH = ROW_H - 18;
-            if (y + rowH < RULER_H || y > canvas.getHeight()) continue;
-            Color color = DawStyle.track(trackIndex);
-            boolean selected = trackIndex == selectedTrack;
-            for (int cycle = 0; cycle < loopCycles(); cycle++) {
-                double clipStart = cycle * loopBeats;
-                if (clipStart >= totalBeats()) break;
-                double x1 = xForBeat(clipStart), x2 = xForBeat(clipStart + loopBeats);
-                if (x2 < HEADER_W || x1 > canvas.getWidth()) continue;
-                double left = Math.max(HEADER_W + 1, x1);
-                double right = Math.min(canvas.getWidth(), Math.min(x2, xForBeat(totalBeats())));
-                double width = Math.max(0, right - left - 2);
-                if (width < 1) continue;
-                gc.setFill(DawStyle.alpha(color, selected ? .22 : .12));
-                gc.fillRoundRect(left + 1, y, width, rowH, 2, 2);
-                gc.setStroke(DawStyle.alpha(selected ? DawStyle.ACCENT : color, selected ? .68 : .32));
-                gc.setLineWidth(1);
-                gc.strokeRoundRect(left + 1.5, y + .5, Math.max(0, width - 1), rowH - 1, 2, 2);
-                if (width > 42) {
-                    gc.setFill(DawStyle.alpha(color, .9));
-                    gc.setFont(DawStyle.display(8));
-                    gc.setTextAlign(TextAlignment.LEFT);
-                    gc.fillText(tracks.get(trackIndex).instrument() == Beat.Instrument.MELODY
-                            ? "MELODY" : "A", left + 7, y + 12);
+            var track = tracks.get(trackIndex);
+            var trackNotes = trackIndex < notesByTrack.size()
+                    ? notesByTrack.get(trackIndex) : List.<Beat.Hit>of();
+            if (track.repeat()) {
+                for (int cycle = 0; cycle < loopCycles(); cycle++) {
+                    double clipStart = cycle * loopBeats;
+                    if (clipStart >= totalBeats()) break;
+                    drawClip(gc, trackIndex, clipStart, clipStart + loopBeats,
+                            cycle == 0, trackNotes, true);
                 }
-                var trackNotes = trackIndex < notesByTrack.size() ? notesByTrack.get(trackIndex) : List.<Beat.Hit>of();
-                for (var hit : trackNotes) {
-                    if (hit.beat() >= loopBeats) continue;
-                    double x = xForBeat(clipStart + hit.beat());
-                    if (x < left + 1 || x > right - 1) continue;
-                    double noteHeight = 5 + hit.velocity() * 9;
-                    double pitchOffset = -hit.pitch() / (double) Beat.MAX_NOTE_PITCH * Math.min(10, rowH * .28);
-                    double noteY = clamp(y + rowH / 2 - noteHeight / 2 + pitchOffset,
-                            y + 2, y + rowH - noteHeight - 2);
-                    gc.setFill(DawStyle.alpha(color, .95));
-                    gc.fillRoundRect(x, noteY, Math.max(1.5, Math.min(3, zoom * .1)),
-                            noteHeight, 1.5, 1.5);
+            } else {
+                for (int bar = 0; bar < bars; bar++) {
+                    drawClip(gc, trackIndex, bar * 4.0, bar * 4.0 + 4.0,
+                            bar == 0, trackNotes, false);
                 }
             }
+        }
+        drawSelection(gc);
+    }
+
+    private void drawClip(GraphicsContext gc, int trackIndex, double clipStart, double clipEnd,
+                          boolean label, List<Beat.Hit> trackNotes, boolean repeat) {
+        double y = yForTrack(trackIndex) + 9;
+        double rowH = ROW_H - 18;
+        if (y + rowH < RULER_H || y > canvas.getHeight()) return;
+        Color color = DawStyle.track(trackIndex);
+        boolean selected = trackIndex == selectedTrack;
+        double x1 = xForBeat(clipStart), x2 = xForBeat(clipEnd);
+        if (x2 < HEADER_W || x1 > canvas.getWidth()) return;
+        double left = Math.max(HEADER_W + 1, x1);
+        double right = Math.min(canvas.getWidth(), Math.min(x2, xForBeat(totalBeats())));
+        double width = Math.max(0, right - left - 2);
+        if (width < 1) return;
+        gc.setFill(DawStyle.alpha(color, selected ? .22 : .12));
+        gc.fillRoundRect(left + 1, y, width, rowH, 2, 2);
+        gc.setStroke(DawStyle.alpha(selected ? DawStyle.ACCENT : color, selected ? .68 : .32));
+        gc.setLineWidth(1);
+        gc.strokeRoundRect(left + 1.5, y + .5, Math.max(0, width - 1), rowH - 1, 2, 2);
+        if (label && width > 42) {
+            gc.setFill(DawStyle.alpha(color, .9));
+            gc.setFont(DawStyle.display(8));
+            gc.setTextAlign(TextAlignment.LEFT);
+            gc.fillText(tracks.get(trackIndex).instrument() == Beat.Instrument.MELODY
+                    ? "MELODY" : "A", left + 7, y + 12);
+        }
+        for (var hit : trackNotes) {
+            if (repeat) {
+                if (hit.beat() >= loopBeats) continue;
+            } else if (hit.beat() < clipStart || hit.beat() >= clipEnd) {
+                continue;
+            }
+            double beat = repeat ? clipStart + hit.beat() : hit.beat();
+            double x = xForBeat(beat);
+            if (x < left + 1 || x > right - 1) continue;
+            double noteHeight = 5 + hit.velocity() * 9;
+            double pitchOffset = -hit.pitch() / (double) Beat.MAX_NOTE_PITCH
+                    * Math.min(10, rowH * .28);
+            double noteY = clamp(y + rowH / 2 - noteHeight / 2 + pitchOffset,
+                    y + 2, y + rowH - noteHeight - 2);
+            gc.setFill(DawStyle.alpha(color, .95));
+            gc.fillRoundRect(x, noteY, Math.max(1.5, Math.min(3, zoom * .1)),
+                    noteHeight, 1.5, 1.5);
+        }
+    }
+
+    private void drawSelection(GraphicsContext gc) {
+        var selection = selection();
+        if (selection == null) return;
+        for (int track = selection.firstTrack(); track <= selection.lastTrack(); track++) {
+            if (track < 0 || track >= tracks.size()) continue;
+            double y = yForTrack(track) + 1;
+            double x1 = xForBeat(selection.firstBar() * 4.0);
+            double x2 = xForBeat((selection.lastBar() + 1) * 4.0);
+            double left = Math.max(HEADER_W + 1, x1);
+            double right = Math.min(canvas.getWidth(), x2);
+            if (right <= left) continue;
+            gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .10));
+            gc.fillRect(left, y, right - left, ROW_H - 2);
+            gc.setStroke(DawStyle.alpha(DawStyle.ACCENT, .72));
+            gc.setLineWidth(1);
+            gc.strokeRect(left + .5, y + .5, Math.max(0, right - left - 1), ROW_H - 3);
+        }
+        double x = xForBeat(selectedBar * 4.0);
+        if (selectedBar >= 0 && x >= HEADER_W && x <= canvas.getWidth()) {
+            gc.setFill(DawStyle.alpha(DawStyle.ACCENT, .06));
+            gc.fillRect(x, RULER_H, xForBeat((selectedBar + 1) * 4.0) - x,
+                    canvas.getHeight() - RULER_H);
         }
     }
 
@@ -583,7 +782,7 @@ final class ArrangementView extends Region {
             gc.setLineDashes();
         }
         if (!playing) return;
-        double beat = playheadCycle * loopBeats + playhead;
+        double beat = playhead;
         double x = xForBeat(beat);
         if (x < HEADER_W || x > w) return;
         gc.setStroke(DawStyle.PLAYHEAD);

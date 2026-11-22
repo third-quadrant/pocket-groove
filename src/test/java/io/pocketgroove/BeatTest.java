@@ -45,7 +45,7 @@ class BeatTest {
         assertThrows(IllegalArgumentException.class, () -> new Beat.Project(List.of(track, track),
                 List.of(), 4, 120, 0));
         assertThrows(IllegalArgumentException.class, () -> new Beat.Project(List.of(track),
-                List.of(new Beat.Hit(0, 4)), 4, 120, 0));
+                List.of(new Beat.Hit(0, 64)), 4, 120, 0));
         assertThrows(IllegalArgumentException.class, () -> new Beat.Project(List.of(track),
                 List.of(), 8, 120, 0, 1));
         assertThrows(IllegalArgumentException.class, () -> new Beat.Project(List.of(track),

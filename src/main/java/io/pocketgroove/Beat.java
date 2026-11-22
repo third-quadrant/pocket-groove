@@ -28,7 +28,7 @@ public final class Beat {
 
     public record Track(String name, String key, String format, byte[] audio,
                         double pitch, PitchMode pitchMode, Instrument instrument,
-                        int baseMidiNote, boolean formantPreserve) {
+                        int baseMidiNote, boolean formantPreserve, boolean repeat) {
         public Track {
             if (name == null || name.isBlank() || name.length() > 200
                     || key == null || key.isBlank() || key.length() > 100
@@ -40,6 +40,12 @@ public final class Beat {
             audio = audio.clone();
             pitchMode = pitchMode == null ? PitchMode.VARISPEED : pitchMode;
             instrument = instrument == null ? Instrument.DRUM : instrument;
+        }
+        public Track(String name, String key, String format, byte[] audio,
+                     double pitch, PitchMode pitchMode, Instrument instrument,
+                     int baseMidiNote, boolean formantPreserve) {
+            this(name, key, format, audio, pitch, pitchMode, instrument, baseMidiNote,
+                    formantPreserve, instrument == Instrument.MELODY ? false : true);
         }
         public Track(String name, String key, String format, byte[] audio,
                      double pitch, PitchMode pitchMode) {
@@ -56,27 +62,31 @@ public final class Beat {
 
         public Track withPitch(double value) {
             return new Track(name, key, format, audio, value, pitchMode, instrument,
-                    baseMidiNote, formantPreserve);
+                    baseMidiNote, formantPreserve, repeat);
         }
         public Track withPitchMode(PitchMode mode) {
             return new Track(name, key, format, audio, pitch, mode, instrument,
-                    baseMidiNote, formantPreserve);
+                    baseMidiNote, formantPreserve, repeat);
         }
         public Track withFormantPreserve(boolean value) {
             return new Track(name, key, format, audio, pitch, pitchMode, instrument,
-                    baseMidiNote, value);
+                    baseMidiNote, value, repeat);
         }
         public Track withAudio(String newName, String newFormat, byte[] newAudio) {
             return new Track(newName, key, newFormat, newAudio, pitch, pitchMode, instrument,
-                    baseMidiNote, formantPreserve);
+                    baseMidiNote, formantPreserve, repeat);
         }
         public Track withKey(String newKey) {
             return new Track(name, newKey, format, audio, pitch, pitchMode, instrument,
-                    baseMidiNote, formantPreserve);
+                    baseMidiNote, formantPreserve, repeat);
         }
         public Track withInstrument(Instrument newInstrument, int newBaseMidiNote) {
             return new Track(name, key, format, audio, pitch, pitchMode, newInstrument,
-                    newBaseMidiNote, formantPreserve);
+                    newBaseMidiNote, formantPreserve, repeat);
+        }
+        public Track withRepeat(boolean value) {
+            return new Track(name, key, format, audio, pitch, pitchMode, instrument,
+                    baseMidiNote, formantPreserve, value);
         }
     }
 
@@ -93,7 +103,8 @@ public final class Beat {
                     || bars < Math.max(1, (int) Math.ceil(length / 4.0)) || bars > 512)
                 throw new IllegalArgumentException("트랙, 단축키, 타격, 루프 또는 전체 마디 설정이 올바르지 않습니다.");
             var frozenTracks = List.copyOf(tracks);
-            if (hits.stream().anyMatch(h -> h.track() >= frozenTracks.size() || h.beat() >= length))
+            double songBeats = bars * 4.0;
+            if (hits.stream().anyMatch(h -> h.track() >= frozenTracks.size() || h.beat() >= songBeats))
                 throw new IllegalArgumentException("트랙, 단축키, 타격 또는 루프 설정이 올바르지 않습니다.");
             tracks = frozenTracks;
             hits = hits.stream()
@@ -105,6 +116,10 @@ public final class Beat {
 
         public Project(List<Track> tracks, List<Hit> hits, double length, double bpm, double pitch) {
             this(tracks, hits, length, bpm, pitch, Math.max(16, (int) Math.ceil(length / 4.0)));
+        }
+
+        public double songBeats() {
+            return bars * 4.0;
         }
     }
 
