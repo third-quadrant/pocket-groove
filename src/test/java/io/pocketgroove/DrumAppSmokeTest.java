@@ -232,6 +232,8 @@ class DrumAppSmokeTest {
                 assertEquals(Beat.Instrument.MELODY, melody.instrument());
                 assertEquals(60, melody.baseMidiNote());
                 assertEquals(Beat.PitchMode.PITCH_SHIFT, melody.pitchMode());
+                app.selectTrackForTest(7);
+                capture(stage.getScene(), "desktop-melody");
                 app.openPianoRollForTest(7);
                 assertTrue(app.pianoRollShowingForTest(), "a melody track should open its piano roll");
                 var window = javafx.stage.Window.getWindows().stream()
@@ -259,6 +261,7 @@ class DrumAppSmokeTest {
                         app.currentProjectForTest().hits().stream()
                                 .filter(hit -> hit.track() == 7)
                                 .map(Beat.Hit::pitch).toList());
+                capture(window.getScene(), "piano-roll");
                 return null;
             });
             Thread.sleep(500);
