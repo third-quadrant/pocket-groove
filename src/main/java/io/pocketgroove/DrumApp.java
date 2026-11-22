@@ -1415,32 +1415,25 @@ public final class DrumApp extends Application {
         var folder = currentFile != null && currentFile.getParent() != null
                 ? currentFile.getParent() : defaultExportFolder();
         var request = Mp3ExportDialog.show(stage, base, projectBars,
-                bpm == null ? 100 : bpm.getValue());
+                bpm == null ? 100 : bpm.getValue(), folder);
         if (request == null) return;
-
-        var chooser = chooser("내보내기", request.format() == Mp3ExportDialog.Format.MP3
-                ? "MP3 오디오" : "MIDI 파일", request.format() == Mp3ExportDialog.Format.MP3 ? "*.mp3" : "*.mid");
-        chooser.setInitialDirectory(folder.toFile());
-        chooser.setInitialFileName(request.name()
-                + (request.format() == Mp3ExportDialog.Format.MP3 ? ".mp3" : ".mid"));
-        var file = chooser.showSaveDialog(stage);
-        if (file == null) return;
-        Path destination = file.toPath();
-        String lower = destination.toString().toLowerCase(Locale.ROOT);
-        boolean mp3 = request.format() == Mp3ExportDialog.Format.MP3;
-        if (mp3 && !lower.endsWith(".mp3")) destination = Path.of(destination + ".mp3");
-        if (!mp3 && !lower.endsWith(".mid") && !lower.endsWith(".midi"))
-            destination = Path.of(destination + ".mid");
+        Path destination = request.path();
         if (Files.exists(destination)
                 && !confirm("파일 덮어쓰기", destination.getFileName() + " 파일을 바꿀까요?")) return;
         var project = projectSnapshot();
         double gain = master.getValue();
         Path target = destination;
-        setBusy(true, mp3 ? "MP3로 인코딩하는 중입니다…" : "MIDI 파일을 만드는 중입니다…");
+        var format = request.format();
+        setBusy(true, format == Mp3ExportDialog.Format.MP3 ? "MP3로 인코딩하는 중입니다…"
+                : format == Mp3ExportDialog.Format.WAV ? "WAV로 렌더링하는 중입니다…"
+                : "MIDI 파일을 만드는 중입니다…");
         io.submit(() -> {
             try {
-                if (mp3) Mp3Exporter.export(target, project, gain, request.startBar(), request.endBar());
-                else MidiExporter.export(target, project, request.startBar(), request.endBar());
+                switch (format) {
+                    case WAV -> WavExporter.export(target, project, gain, request.startBar(), request.endBar());
+                    case MP3 -> Mp3Exporter.export(target, project, gain, request.startBar(), request.endBar());
+                    case MIDI -> MidiExporter.export(target, project, request.startBar(), request.endBar());
+                }
                 long size = Files.size(target);
                 Platform.runLater(() -> {
                     if (closed) return;
@@ -1448,7 +1441,7 @@ public final class DrumApp extends Application {
                     String range = request.startBar() == request.endBar()
                             ? request.startBar() + "마디"
                             : request.startBar() + "–" + request.endBar() + "마디";
-                    status.setText((mp3 ? "MP3" : "MIDI") + "를 저장했습니다 · " + target.getFileName()
+                    status.setText(format.name() + "를 저장했습니다 · " + target.getFileName()
                             + " · " + range + " · " + String.format(Locale.ROOT, "%.1f MB",
                             size / 1048576.0));
                 });

@@ -6,7 +6,7 @@
 
 ## 실행
 
-Windows x64 배포 ZIP을 **전체 압축 해제**하고 `PocketGroove/PocketGroove.exe`를 실행하세요. Java 설치가 필요 없습니다. `app`과 `runtime` 폴더가 필요하므로 exe만 따로 옮기지 마세요. 저장소에서 직접 빌드하면 실행 파일은 `dist/PocketGroove-0.6.2/PocketGroove/PocketGroove.exe`에 만들어집니다.
+Windows x64 배포 ZIP을 **전체 압축 해제**하고 `PocketGroove/PocketGroove.exe`를 실행하세요. Java 설치가 필요 없습니다. `app`과 `runtime` 폴더가 필요하므로 exe만 따로 옮기지 마세요. 저장소에서 직접 빌드하면 실행 파일은 `dist/PocketGroove-0.6.3/PocketGroove/PocketGroove.exe`에 만들어집니다.
 
 ## 화면과 조작
 
@@ -75,12 +75,13 @@ Windows x64 배포 ZIP을 **전체 압축 해제**하고 `PocketGroove/PocketGro
 
 - `Ctrl+S`: 이미 연 `.mdrum` 파일이 있으면 그 파일에 바로 덮어씁니다. 새 프로젝트라 파일이 없으면 자동으로 **다른 이름으로 저장** 창을 엽니다.
 - `Ctrl+Shift+S`: 항상 **다른 이름으로 저장** 창을 엽니다.
-- **내보내기**를 누르면 앱 안에서 **형식(MP3 / MIDI)**과 파일 이름, 마디 범위를 정한 뒤 **파일 탐색기에서 저장 위치를 고릅니다.**
+- **내보내기**를 누르면 앱 안에서 **형식(WAV / MP3 / MIDI)**과 파일 이름, 마디 범위를 정합니다. **찾아보기…**로 파일 탐색기에서 저장 폴더를 직접 고를 수 있습니다.
 - 마디 범위는 기본값 **전체**입니다. `1-10`은 1~10마디, `3`은 3마디만, `전체`는 1~마지막 마디까지입니다.
-- **MP3**: 실제 트랙 소리·Velocity·트랙 피치·스텝별 음높이·MASTER 음량을 48 kHz로 섞고, BPM에 맞는 정확한 길이로 인코딩합니다. 제목과 BPM 메타데이터도 기록합니다.
+- **WAV**: 32-bit float, 48 kHz로 앱 오디오와 같은 샘플을 저장합니다. DAW에서 마디·템포가 가장 정확히 맞습니다. 기본 형식입니다.
+- **MP3**: 실제 트랙 소리·Velocity·트랙 피치·스텝별 음높이·MASTER 음량을 48 kHz로 섞고 BPM 길이로 인코딩합니다. 제목과 BPM 메타데이터도 기록하지만, MP3 압축 특성상 파일 시작에 아주 작은 인코더 지연이 있을 수 있습니다.
 - **MIDI**: Standard MIDI File(format 1)로 저장합니다. 트랙별 이름, BPM 템포, 4/4 박자, 노트와 Velocity가 들어가고 각 트랙은 GM 드럼 채널 10으로 내보냅니다. 기본 노트는 Kick 36, Snare 38, Closed Hi-Hat 42, Open Hi-Hat 46, Clap 39, Tom 45, Percussion 49이며, 트랙/스텝 피치는 노트 번호에 반영됩니다.
-- MP3 자체는 DAW 프로젝트의 템포를 바꾸지 않습니다. 내보내기 창에 적힌 BPM(예: 100)을 받는 DAW의 프로젝트에도 똑같이 맞추면 마디와 박자가 정확히 맞습니다. MIDI에는 템포가 직접 기록됩니다.
-- 저장 파일에는 소리·트랙 이름·단축키·트랙별 피치·피치 방식·스텝별 음높이·타격 위치·Velocity·템포·전체 피치·루프 길이·전체 마디 수가 들어갑니다. 이전 0.1–0.6.1 프로젝트도 열 수 있습니다.
+- WAV/MP3는 DAW 프로젝트의 템포를 직접 바꾸지 않습니다. 내보내기 창에 적힌 BPM(예: 100)을 받는 DAW의 프로젝트에도 맞추면 마디와 박자가 정확히 맞습니다. MIDI에는 템포가 직접 기록됩니다.
+- 저장 파일에는 소리·트랙 이름·단축키·트랙별 피치·피치 방식·스텝별 음높이·타격 위치·Velocity·템포·전체 피치·루프 길이·전체 마디 수가 들어갑니다. 이전 0.1–0.6.2 프로젝트도 열 수 있습니다.
 
 ### `.mdrum` 파일 연결
 
@@ -136,7 +137,9 @@ GitHub Actions는 Windows 빌드 ZIP을 artifact로 제공합니다. GitHub Rele
 - `Pattern`: 스텝 토글·Velocity·트랙 삭제의 순수 로직
 - `KeyBindings`: 숫자패드·문자 주입·조합키 매칭
 - `WaveformTrimDialog`: 가져올 소리의 파형, 양 끝 선택, 무음 제거, 선택 구간 미리 듣기
-- `Mp3Exporter`: 지정 마디 범위를 메모리에서 섞고 LAME으로 MP3 인코딩, BPM/제목 태그 기록
+- `OfflineMix`: WAV/MP3가 함께 쓰는 48 kHz 스트리밍 오프라인 믹서
+- `WavExporter`: 지정 마디 범위를 32-bit float WAV로 정확히 저장
+- `Mp3Exporter`: 지정 마디 범위를 MP3로 인코딩, BPM/제목 태그 기록
 - `MidiExporter`: 지정 마디 범위를 Standard MIDI File(format 1)로 내보내기
 - `Mp3ExportDialog`: 내보내기 형식(MP3/MIDI), 파일 이름과 마디 범위(`전체`, `1-10`, `3`) 입력
 - `FileAssociations`: 패키지 EXE를 `.mdrum` 기본 프로그램으로 등록하고 시작 인자를 프로젝트 경로로 해석

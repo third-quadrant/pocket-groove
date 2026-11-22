@@ -23,6 +23,8 @@ final class MidiExporter {
         double startBeat = (startBar - 1) * 4.0, endBeat = endBar * 4.0;
         int endTick = (int) Math.round((endBeat - startBeat) * DIVISION);
 
+        var parent = destination.toAbsolutePath().getParent();
+        if (parent != null) Files.createDirectories(parent);
         var file = new ByteArrayOutputStream();
         writeChunk(file, "MThd", new byte[]{
                 0, 1, (byte) (0 >> 8), (byte) (1 + project.tracks().size()),

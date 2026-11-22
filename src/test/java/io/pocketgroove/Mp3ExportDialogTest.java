@@ -22,4 +22,20 @@ class Mp3ExportDialogTest {
         assertEquals("a_b_c", Mp3ExportDialog.cleanName(" a/b:c "));
         assertEquals("PocketGroove", Mp3ExportDialog.cleanName("  "));
     }
+
+    @Test void saveFolderCanBeTypedAndIsNormalised(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        var missing = dir.resolve("new folder");
+        assertEquals(missing.toAbsolutePath().normalize(),
+                Mp3ExportDialog.parseFolder(" " + missing + " ", dir).orElseThrow());
+        var file = dir.resolve("not-a-folder.txt");
+        java.nio.file.Files.writeString(file, "x");
+        assertTrue(Mp3ExportDialog.parseFolder(file.toString(), dir).isEmpty());
+        assertEquals(dir.toAbsolutePath().normalize(),
+                Mp3ExportDialog.parseFolder("", dir).orElseThrow());
+        var request = new Mp3ExportDialog.Request("mix", dir, 1, 2, Mp3ExportDialog.Format.MIDI);
+        assertEquals(dir.resolve("mix.mid"), request.path());
+        assertEquals(dir.resolve("mix.wav"), new Mp3ExportDialog.Request(
+                "mix", dir, 1, 2, Mp3ExportDialog.Format.WAV).path());
+    }
 }

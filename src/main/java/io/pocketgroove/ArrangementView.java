@@ -190,6 +190,7 @@ final class ArrangementView extends Region {
     int selectedTrack() { return selectedTrack; }
     int trackCount() { return tracks.size(); }
     double horizontalMaxForTest() { return horizontal.getMax(); }
+    double horizontalVisibleForTest() { return horizontal.getVisibleAmount(); }
     double horizontalValueForTest() { return horizontal.getValue(); }
     void incrementHorizontalForTest() { horizontal.increment(); }
     void scrollHorizontalForTest(double value) { horizontal.setValue(value); }
@@ -338,17 +339,24 @@ final class ArrangementView extends Region {
         updatingBars = true;
         try {
             double view = viewBeats();
+            double total = totalBeats();
+            double max = Math.max(0, total - view);
             horizontal.setMin(0);
-            horizontal.setMax(Math.max(0, totalBeats() - view));
-            horizontal.setVisibleAmount(view);
+            horizontal.setMax(max);
+            // ScrollBarSkin sizes the thumb as visibleAmount/(max-min); use the
+            // actual visible fraction so a full thumb means "nothing to scroll".
+            horizontal.setVisibleAmount(max * view / total);
             horizontal.setBlockIncrement(view * .7);
-            horizontal.setValue(clamp(horizontal.getValue(), 0, horizontal.getMax()));
+            horizontal.setValue(clamp(horizontal.getValue(), 0, max));
+            horizontal.setVisible(max > 0);
             double rows = visibleRows();
+            double rowMax = Math.max(0, tracks.size() - rows);
             vertical.setMin(0);
-            vertical.setMax(Math.max(0, tracks.size() - rows));
-            vertical.setVisibleAmount(rows);
-            vertical.setBlockIncrement(rows);
-            vertical.setValue(clamp(vertical.getValue(), 0, vertical.getMax()));
+            vertical.setMax(rowMax);
+            vertical.setVisibleAmount(rowMax * rows / Math.max(1, tracks.size()));
+            vertical.setBlockIncrement(rows * .7);
+            vertical.setValue(clamp(vertical.getValue(), 0, rowMax));
+            vertical.setVisible(rowMax > 0);
         } finally {
             updatingBars = false;
         }

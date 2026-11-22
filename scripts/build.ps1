@@ -34,14 +34,14 @@ Write-Host "Running checks: $($arguments -join ' ')"
 if ($LASTEXITCODE -ne 0) { throw 'Build or tests failed.' }
 if (-not $Package) { exit 0 }
 
-$name = 'PocketGroove-0.6.2'
+$name = 'PocketGroove-0.6.3'
 $inputDir = Join-Path $PWD 'target/package-input'
 $distDir = Join-Path $PWD "dist/$name"
 $appDir = Join-Path $distDir 'PocketGroove'
 $zipPath = Join-Path $PWD "dist/$name-windows-x64.zip"
 if (Test-Path $inputDir) { Remove-Item $inputDir -Recurse -Force }
 New-Item -ItemType Directory -Force $inputDir, dist | Out-Null
-Copy-Item target/pocket-groove-0.6.2.jar $inputDir/
+Copy-Item target/pocket-groove-0.6.3.jar $inputDir/
 Copy-Item target/lib $inputDir/lib -Recurse
 Copy-Item target/native/pocketgroove_audio.dll $inputDir/
 Copy-Item LICENSE,THIRD_PARTY_NOTICES.md,README.md $inputDir/
@@ -49,7 +49,7 @@ Copy-Item src/main/resources/fonts/*OFL.txt $inputDir/
 Copy-Item licenses $inputDir/licenses -Recurse
 if (Test-Path $distDir) { Remove-Item $distDir -Recurse -Force }
 New-Item -ItemType Directory -Force $distDir | Out-Null
-& "$env:JAVA_HOME/bin/jpackage.exe" --type app-image --name PocketGroove --app-version 0.6.2 --vendor 'Pocket Groove contributors' --input $inputDir --main-jar pocket-groove-0.6.2.jar --main-class io.pocketgroove.Launcher --dest $distDir --add-modules java.desktop,java.logging,java.xml,jdk.unsupported,jdk.charsets --java-options '--module-path=$APPDIR/lib' --java-options '--add-modules=javafx.controls'
+& "$env:JAVA_HOME/bin/jpackage.exe" --type app-image --name PocketGroove --app-version 0.6.3 --vendor 'Pocket Groove contributors' --input $inputDir --main-jar pocket-groove-0.6.3.jar --main-class io.pocketgroove.Launcher --dest $distDir --add-modules java.desktop,java.logging,java.xml,jdk.unsupported,jdk.charsets --java-options '--module-path=$APPDIR/lib' --java-options '--add-modules=javafx.controls'
 if ($LASTEXITCODE -ne 0) { throw 'jpackage failed.' }
 Copy-Item LICENSE,THIRD_PARTY_NOTICES.md,README.md $appDir/
 Compress-Archive -Path $appDir -DestinationPath $zipPath -Force

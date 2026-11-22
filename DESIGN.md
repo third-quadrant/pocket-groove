@@ -17,7 +17,7 @@ Native JavaFX/CSS, one Operate surface. The workspace is arranged like a DAW, no
 
 ## Layout
 
-- Top: transport with REC/PLAY/STOP, position `bar · beat · sixteenth`, BPM, 4/4, loop length, master, pitch and output settings.
+- Top: transport with REC/PLAY/STOP, position `bar · beat · sixteenth`, BPM, 4/4, loop length, master, pitch and output settings. Export defaults to sample-exact WAV; MP3/MIDI remain selectable.
 - Second row: a Korean hamburger file menu, undo/redo, selected track and key, track pitch, key/sound actions, add/remove track, song length (`BARS` + `+ 바`) and timeline zoom.
 - Center: a single Canvas workspace with fixed track headers and a horizontally scrollable bar/beat/16th grid bounded by the project bar count. Repeated pattern clips preview each track's hits, velocity and note pitch.
 - Bottom: selected-track step sequencer with 16th cells, a velocity lane and stepped note-pitch lane.

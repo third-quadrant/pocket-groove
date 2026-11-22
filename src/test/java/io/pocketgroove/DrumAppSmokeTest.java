@@ -162,6 +162,8 @@ class DrumAppSmokeTest {
                         "arrangement should remain usable at compact height");
                 assertTrue(arrangement.horizontalMaxForTest() > 0,
                         "the timeline must be horizontally scrollable");
+                assertTrue(arrangement.horizontalVisibleForTest() < arrangement.horizontalMaxForTest(),
+                        "the horizontal scroll thumb must not fill the whole track");
                 double beforeScroll = arrangement.horizontalValueForTest();
                 arrangement.incrementHorizontalForTest();
                 assertTrue(arrangement.horizontalValueForTest() > beforeScroll,
@@ -284,7 +286,7 @@ class DrumAppSmokeTest {
             });
 
             fx(() -> {
-                var values = new String[3];
+                var values = new String[4];
                 var pause = new javafx.animation.PauseTransition(
                         javafx.util.Duration.millis(700));
                 pause.setOnFinished(e -> {
@@ -296,6 +298,8 @@ class DrumAppSmokeTest {
                                     window.getScene().lookup("#export-range")).getText();
                             values[2] = String.valueOf(((javafx.scene.control.ComboBox<?>)
                                     window.getScene().lookup("#export-format")).getValue());
+                            values[3] = ((javafx.scene.control.TextField)
+                                    window.getScene().lookup("#export-folder")).getText();
                             try {
                                 capture(window.getScene(), "export");
                             } catch (Exception ignored) {
@@ -305,11 +309,13 @@ class DrumAppSmokeTest {
                     }
                 });
                 pause.play();
+                Path exportFolder = Path.of("target");
                 assertNull(Mp3ExportDialog.show(stage, "ui-save",
-                        app.currentProjectForTest().bars(), 100));
+                        app.currentProjectForTest().bars(), 100, exportFolder));
                 assertEquals("ui-save", values[0]);
                 assertEquals("전체", values[1]);
-                assertEquals("MP3", values[2]);
+                assertEquals("WAV", values[2]);
+                assertEquals(exportFolder.toAbsolutePath().normalize().toString(), values[3]);
                 return null;
             });
         } finally {

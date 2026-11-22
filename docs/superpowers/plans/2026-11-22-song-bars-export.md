@@ -26,5 +26,5 @@
 - Ruling: bars are a project-level repeat count rather than independent per-bar patterns. This matches the user's “copy the unchanged repeated form” wording and keeps the existing one-loop editor. Cost if wrong: different melodies per bar require a future arranger.
 - Ruling: old files without bars default to 16 (or the loop's own bar count if larger), so opening an old one-loop project immediately exports a finite song instead of one bar.
 - Ruling: MP3 timing is exact and a TBPM tag is written, but the receiving DAW's project tempo still controls playback. Cost if wrong: users expecting MP3 to set the DAW tempo will still need to set BPM manually.
-- Verification: 37 regular Java tests (incl. MP3 range/duration/sample-rate, MIDI SMF parsing, dialog range/format parsing, pitch mode), 1 JavaFX UI test, 2 WASAPI tests, 1 native CTest. UI checks BARS and `+ 바`, scrollbar increment, default `전체`, trim preview, save overwrite, macro input, pitch mode and per-step pitch.
-- Packaging: `dist/PocketGroove-0.6.2/`, `dist/PocketGroove-0.6.2-windows-x64.zip`; older distribution folders preserved.
+- Verification: 40 regular Java tests (incl. WAV exact frames, MP3 range/duration/sample-rate, MIDI SMF parsing, dialog range/folder parsing, pitch mode), 1 JavaFX UI test, 2 WASAPI tests, 1 native CTest. UI checks BARS and `+ 바`, scrollbar thumb/increment, default `전체`, trim preview, save overwrite, macro input, pitch mode and per-step pitch.
+- Packaging: `dist/PocketGroove-0.6.3/`, `dist/PocketGroove-0.6.3-windows-x64.zip`; older distribution folders preserved.
