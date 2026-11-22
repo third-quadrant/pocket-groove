@@ -181,6 +181,47 @@ class ProjectIOTest {
         assertEquals(Beat.DEFAULT_NOTE_LENGTH, loaded.hits().get(0).length(), 0.00001);
     }
 
+    @Test void versionThreeFourAndFiveKeepTheirSchemaMeaning() throws Exception {
+        Path v3 = dir.resolve("v3.mdrum");
+        writeLegacy(v3, 3, "0,1.0,0.8", null);
+        var v3Loaded = ProjectIO.load(v3);
+        assertEquals(-4, v3Loaded.tracks().get(0).pitch(), 0.00001);
+        assertEquals(Beat.PitchMode.VARISPEED, v3Loaded.tracks().get(0).pitchMode());
+        assertEquals(0, v3Loaded.hits().get(0).pitch(), 0.00001);
+
+        Path v4 = dir.resolve("v4.mdrum");
+        writeLegacy(v4, 4, "0,1.0,0.8,7", null);
+        var v4Loaded = ProjectIO.load(v4);
+        assertEquals(7, v4Loaded.hits().get(0).pitch(), 0.00001);
+        assertEquals(16, v4Loaded.bars());
+
+        Path v5 = dir.resolve("v5.mdrum");
+        writeLegacy(v5, 5, "0,1.0,0.8,7", "20");
+        var v5Loaded = ProjectIO.load(v5);
+        assertEquals(20, v5Loaded.bars());
+        assertEquals(Beat.PitchMode.VARISPEED, v5Loaded.tracks().get(0).pitchMode());
+    }
+
+    private void writeLegacy(Path path, int version, String hit, String bars) throws Exception {
+        var props = new java.util.Properties();
+        props.setProperty("version", Integer.toString(version));
+        props.setProperty("tracks", "1");
+        props.setProperty("bpm", "100");
+        props.setProperty("pitch", "0");
+        props.setProperty("length", "4");
+        props.setProperty("hits", "1");
+        props.setProperty("hit.0", hit);
+        props.setProperty("track.0.name", "Old Kick");
+        props.setProperty("track.0.key", "1");
+        props.setProperty("track.0.format", "wav");
+        if (version >= 3) props.setProperty("track.0.pitch", "-4");
+        if (bars != null) props.setProperty("bars", bars);
+        try (var zip = new ZipOutputStream(Files.newOutputStream(path))) {
+            zip.putNextEntry(new ZipEntry("sounds/0")); zip.write(new byte[]{1, 2}); zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("project.properties")); props.store(zip, "v" + version); zip.closeEntry();
+        }
+    }
+
     @Test void malformedArchiveIsRejectedWithoutExtractingPaths() throws Exception {
         Path path = dir.resolve("bad.mdrum");
         try (var zip = new ZipOutputStream(Files.newOutputStream(path))) {
