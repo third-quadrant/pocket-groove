@@ -385,7 +385,7 @@ public final class DrumApp extends Application {
         menuOpen.setOnAction(e -> openProject());
         menuSave.setOnAction(e -> saveProject());
         menuSaveAs.setOnAction(e -> saveProjectAs());
-        menuExport.setOnAction(e -> exportMp3());
+        menuExport.setOnAction(e -> exportAudio());
         fileMenu = new MenuButton("☰");
         fileMenu.setId("file-menu");
         fileMenu.getStyleClass().add("file-menu");
@@ -1403,7 +1403,7 @@ public final class DrumApp extends Application {
         return true;
     }
 
-    private void exportMp3() {
+    private void exportAudio() {
         if (busy || recording || playing) return;
         if (hits.isEmpty()) {
             status.setText("먼저 스텝을 입력하거나 녹음하세요.");
@@ -1414,7 +1414,7 @@ public final class DrumApp extends Application {
         if (dot > 0) base = base.substring(0, dot);
         var folder = currentFile != null && currentFile.getParent() != null
                 ? currentFile.getParent() : defaultExportFolder();
-        var request = Mp3ExportDialog.show(stage, base, projectBars,
+        var request = ExportDialog.show(stage, base, projectBars,
                 bpm == null ? 100 : bpm.getValue(), folder);
         if (request == null) return;
         Path destination = request.path();
@@ -1424,14 +1424,12 @@ public final class DrumApp extends Application {
         double gain = master.getValue();
         Path target = destination;
         var format = request.format();
-        setBusy(true, format == Mp3ExportDialog.Format.MP3 ? "MP3로 인코딩하는 중입니다…"
-                : format == Mp3ExportDialog.Format.WAV ? "WAV로 렌더링하는 중입니다…"
+        setBusy(true, format == ExportDialog.Format.WAV ? "WAV로 렌더링하는 중입니다…"
                 : "MIDI 파일을 만드는 중입니다…");
         io.submit(() -> {
             try {
                 switch (format) {
                     case WAV -> WavExporter.export(target, project, gain, request.startBar(), request.endBar());
-                    case MP3 -> Mp3Exporter.export(target, project, gain, request.startBar(), request.endBar());
                     case MIDI -> MidiExporter.export(target, project, request.startBar(), request.endBar());
                 }
                 long size = Files.size(target);
@@ -1716,6 +1714,7 @@ public final class DrumApp extends Application {
     @Override public void stop() {
         closed = true;
         if (animation != null) animation.stop();
+        if (loopSyncDelay != null) loopSyncDelay.stop();
         if (audio != null) audio.close();
         io.shutdownNow();
     }

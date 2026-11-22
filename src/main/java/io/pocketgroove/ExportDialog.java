@@ -21,32 +21,31 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
-/** Asks for the MP3 name and bar range without opening a file explorer. */
-final class Mp3ExportDialog {
+/** Asks for the export name, format and bar range without opening a file explorer. */
+final class ExportDialog {
     private static final Pattern RANGE = Pattern.compile("^(\\d+)(?:\\s*-\\s*(\\d+))?$");
 
-    enum Format { WAV, MP3, MIDI }
+    enum Format { WAV, MIDI }
 
     record Request(String name, Path folder, int startBar, int endBar, Format format) {
         Path path() {
             String extension = switch (format) {
                 case WAV -> ".wav";
-                case MP3 -> ".mp3";
                 case MIDI -> ".mid";
             };
             return folder.resolve(name + extension);
         }
     }
 
-    private Mp3ExportDialog() {}
+    private ExportDialog() {}
 
     static Request show(Window owner, String defaultName, int totalBars, int bpm, Path defaultFolder) {
         var dialog = new Dialog<ButtonType>();
         dialog.initOwner(owner);
-        dialog.setTitle("MP3 내보내기");
+        dialog.setTitle("내보내기");
         dialog.setHeaderText("BPM " + bpm + " · 전체 " + totalBars + "마디");
         dialog.getDialogPane().getStylesheets().add(
-                Mp3ExportDialog.class.getResource("/drum.css").toExternalForm());
+                ExportDialog.class.getResource("/drum.css").toExternalForm());
 
         var name = new TextField(cleanName(defaultName));
         name.setId("export-name");
@@ -68,7 +67,6 @@ final class Mp3ExportDialog {
             @Override public String toString(Format value) {
                 return value == null ? "" : switch (value) {
                     case WAV -> "WAV (DAW 정확)";
-                    case MP3 -> "MP3";
                     case MIDI -> "MIDI";
                 };
             }
@@ -93,7 +91,7 @@ final class Mp3ExportDialog {
         var help = new Label("범위: 전체, 1-10, 3처럼 입력합니다.  전체는 1–" + totalBars + "마디입니다.");
         help.getStyleClass().add("dialog-note");
         help.setWrapText(true);
-        var tempoHelp = new Label("WAV는 샘플 단위로 정확합니다. MP3는 압축 지연이 있을 수 있습니다. "
+        var tempoHelp = new Label("WAV는 샘플 단위로 정확합니다. "
                 + "DAW 프로젝트 BPM은 " + Math.round(bpm) + "으로 맞추세요.");
         tempoHelp.getStyleClass().add("dialog-note");
         tempoHelp.setWrapText(true);
@@ -178,8 +176,7 @@ final class Mp3ExportDialog {
     static String cleanName(String raw) {
         String name = raw == null ? "" : raw.trim();
         String lower = name.toLowerCase(Locale.ROOT);
-        if (lower.endsWith(".mp3")) name = name.substring(0, name.length() - 4).trim();
-        else if (lower.endsWith(".wav")) name = name.substring(0, name.length() - 4).trim();
+        if (lower.endsWith(".wav")) name = name.substring(0, name.length() - 4).trim();
         else if (lower.endsWith(".midi")) name = name.substring(0, name.length() - 5).trim();
         else if (lower.endsWith(".mid")) name = name.substring(0, name.length() - 4).trim();
         name = name.replaceAll("[\\\\/:*?\"<>|]", "_");

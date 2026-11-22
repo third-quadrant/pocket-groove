@@ -7,9 +7,6 @@
       <groupId>com.googlecode.soundlibs</groupId><artifactId>mp3spi</artifactId><version>1.9.5.4</version>
       <exclusions><exclusion><groupId>junit</groupId><artifactId>junit</artifactId></exclusion></exclusions>
     </dependency>
-    <dependency>
-      <groupId>io.github.raphimc</groupId><artifactId>jump3r</artifactId><version>1.0.6</version>
-    </dependency>
     <dependency><groupId>org.openjfx</groupId><artifactId>javafx-controls</artifactId><version>${javafx.version}</version></dependency>
     <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.11.4</version><scope>test</scope></dependency>
   </dependencies>

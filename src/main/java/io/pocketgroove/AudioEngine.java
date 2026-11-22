@@ -1,8 +1,6 @@
 package io.pocketgroove;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -19,18 +17,7 @@ final class AudioEngine implements AutoCloseable {
     private AudioEngine(long handle) { this.handle = handle; }
 
     static {
-        Path path = Path.of(System.getProperty("groove.native.path", defaultNativePath()));
-        if (Files.isRegularFile(path)) System.load(path.toAbsolutePath().toString());
-        else System.loadLibrary("pocketgroove_audio");
-    }
-
-    private static String defaultNativePath() {
-        try {
-            Path location = Path.of(AudioEngine.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-            return location.getParent().resolve("pocketgroove_audio.dll").toString();
-        } catch (Exception e) {
-            return "target/native/pocketgroove_audio.dll";
-        }
+        NativeLibrary.load();
     }
 
     static AudioEngine open(int device, boolean exclusive, int frames) throws IOException {

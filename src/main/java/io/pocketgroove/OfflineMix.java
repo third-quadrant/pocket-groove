@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Shared offline renderer for WAV and MP3; output is 48 kHz stereo float. */
+/** Shared offline renderer for WAV; output is 48 kHz stereo float. */
 final class OfflineMix {
     static final int SAMPLE_RATE = 48000;
     private static final int CHUNK = 4096;

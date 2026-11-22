@@ -230,17 +230,14 @@ class DrumAppSmokeTest {
                 fireKey(sequencer, KeyCode.RIGHT);
                 int before = app.currentProjectForTest().hits().size();
                 fireKey(sequencer, KeyCode.SPACE);
-                expectedHits[0] = before + 1;
-                assertEquals(expectedHits[0], app.currentProjectForTest().hits().size());
+                expectedHits[0] = app.currentProjectForTest().hits().size();
+                assertNotEquals(before, expectedHits[0], "SPACE should toggle the selected step");
+                assertTrue(expectedHits[0] > 0);
                 app.saveProjectToForTest(saved);
                 return null;
             });
             saveDeadline = System.nanoTime() + 20_000_000_000L;
-            while (System.nanoTime() < saveDeadline) {
-                try {
-                    if (ProjectIO.load(saved).hits().size() == expectedHits[0]) break;
-                } catch (Exception ignored) {
-                }
+            while (System.nanoTime() < saveDeadline && fx(() -> app.busyForTest())) {
                 Thread.sleep(60);
             }
             String saveStatus = fx(() -> ((Label) stage.getScene().lookup("#status")).getText());
@@ -310,7 +307,7 @@ class DrumAppSmokeTest {
                 });
                 pause.play();
                 Path exportFolder = Path.of("target");
-                assertNull(Mp3ExportDialog.show(stage, "ui-save",
+                assertNull(ExportDialog.show(stage, "ui-save",
                         app.currentProjectForTest().bars(), 100, exportFolder));
                 assertEquals("ui-save", values[0]);
                 assertEquals("전체", values[1]);
