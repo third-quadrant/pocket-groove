@@ -584,6 +584,8 @@ public final class DrumApp extends Application {
 
     void pasteBarsAtForTest(int bar) { pasteBarsAt(bar); }
 
+    double lengthForTest() { return length; }
+
     List<Beat.Track> tracksForTest() { return tracks; }
 
     List<Beat.Hit> hitsForTest() { return hits; }
@@ -812,15 +814,13 @@ public final class DrumApp extends Application {
         }
         int trackIndex = selection.firstTrack();
         var track = tracks.get(trackIndex);
-        if (track.repeat()) {
-            status.setText("반복 트랙은 반복을 끈 뒤 복사할 수 있습니다.");
-            return;
-        }
+        int patternBars = Math.max(1, (int) Math.round(length / 4.0));
         var bars = new ArrayList<List<Beat.Hit>>();
         for (int bar = selection.firstBar(); bar <= selection.lastBar(); bar++) {
+            int sourceBar = track.repeat() ? Math.floorMod(bar, patternBars) : bar;
             var local = new ArrayList<Beat.Hit>();
             for (var hit : SongTimeline.barHits(tracks, hits, trackIndex, bar, length)) {
-                local.add(new Beat.Hit(trackIndex, hit.beat() - bar * 4.0,
+                local.add(new Beat.Hit(trackIndex, hit.beat() - sourceBar * 4.0,
                         hit.velocity(), hit.pitch(), hit.length()));
             }
             bars.add(List.copyOf(local));
@@ -846,29 +846,38 @@ public final class DrumApp extends Application {
             return;
         }
         var track = tracks.get(targetIndex);
-        if (track.repeat()) {
-            status.setText("반복 트랙은 반복을 끈 뒤 붙여넣기 할 수 있습니다.");
-            return;
-        }
+        boolean repeat = track.repeat();
+        int patternBars = Math.max(1, (int) Math.round(length / 4.0));
         int targetBar = bar >= 0 ? Math.min(bar, projectBars - 1)
-                : lastPatternBar(targetIndex) + 1;
+                : repeat ? patternBars : lastPatternBar(targetIndex) + 1;
         if (targetBar < 0) targetBar = 0;
+        int insertionBar = repeat
+                ? (bar >= 0 ? Math.floorMod(targetBar, patternBars) : patternBars)
+                : targetBar;
         remember(projectSnapshot(), targetIndex, selectedStep, "paste-bars");
-        double insertion = targetBar * 4.0;
+        double insertion = insertionBar * 4.0;
         double shift = clipboard.barCount() * 4.0;
         var merged = new ArrayList<Beat.Hit>();
+        double maxBaseBeat = 0;
         for (var hit : hits) {
-            if (hit.track() == targetIndex && hit.beat() >= insertion - 1e-9) {
-                merged.add(new Beat.Hit(targetIndex, hit.beat() + shift,
+            boolean target = hit.track() == targetIndex;
+            boolean activeBase = !repeat || hit.beat() < length - 1e-9;
+            if (target && hit.beat() >= insertion - 1e-9) {
+                double moved = hit.beat() + shift;
+                merged.add(new Beat.Hit(targetIndex, moved,
                         hit.velocity(), hit.pitch(), hit.length()));
+                if (activeBase) maxBaseBeat = Math.max(maxBaseBeat, moved);
             } else {
                 merged.add(hit);
+                if (target && activeBase) maxBaseBeat = Math.max(maxBaseBeat, hit.beat());
             }
         }
         for (int i = 0; i < clipboard.bars().size(); i++) {
             for (var hit : clipboard.bars().get(i)) {
-                merged.add(new Beat.Hit(targetIndex, insertion + i * 4.0 + hit.beat(),
+                double beat = insertion + i * 4.0 + hit.beat();
+                merged.add(new Beat.Hit(targetIndex, beat,
                         hit.velocity(), hit.pitch(), hit.length()));
+                maxBaseBeat = Math.max(maxBaseBeat, beat);
             }
         }
         merged.sort(Comparator.comparingDouble(Beat.Hit::beat)
@@ -881,18 +890,22 @@ public final class DrumApp extends Application {
         final int target = targetIndex;
         double maxBeat = merged.stream().filter(hit -> hit.track() == target)
                 .mapToDouble(Beat.Hit::beat).max().orElse(insertion);
+        double newLength = repeat ? Math.max(length,
+                Math.max(insertion + shift, Math.ceil((maxBaseBeat + 1e-9) / 4.0) * 4.0)) : length;
         int neededBars = Math.max(projectBars,
                 Math.max(targetBar + clipboard.barCount(),
-                        (int) Math.ceil((maxBeat + 1e-9) / 4.0)));
+                        Math.max((int) Math.ceil((maxBeat + 1e-9) / 4.0),
+                                (int) Math.ceil(newLength / 4.0))));
         if (neededBars > 512) {
             status.setText("512마디를 넘어 붙여넣을 수 없습니다.");
             return;
         }
+        length = newLength;
         projectBars = Math.max(1, neededBars);
         hits = List.copyOf(merged);
-        selectedBar = targetBar;
+        selectedBar = Math.min(targetBar, projectBars - 1);
         barSelected = true;
-        arrangement.setSelectedBar(targetBar);
+        arrangement.setSelectedBar(selectedBar);
         markDirty();
         refreshUi();
         scheduleLoopSync();

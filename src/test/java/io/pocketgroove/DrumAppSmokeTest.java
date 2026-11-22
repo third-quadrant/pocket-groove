@@ -330,6 +330,19 @@ class DrumAppSmokeTest {
                 assertEquals(before, app.hitsForTest().stream()
                         .filter(hit -> hit.track() == 7).count(),
                         "turning repeat on must not delete note data");
+                double repeatLength = app.lengthForTest();
+                app.setBarSelectionForTest(7, 0, 7, 0);
+                app.copyBarsForTest();
+                app.pasteBarsAtForTest(0);
+                assertTrue(app.tracksForTest().get(7).repeat(),
+                        "pasting into a repeat track keeps it repeating");
+                assertTrue(app.lengthForTest() > repeatLength,
+                        "pasting into a repeat pattern extends the pattern when needed");
+                assertTrue(app.hitsForTest().stream().filter(hit -> hit.track() == 7).count() > before);
+                Event.fireEvent(stage.getScene(), pressed(KeyCode.Z, true, false));
+                assertEquals(before, app.hitsForTest().stream()
+                        .filter(hit -> hit.track() == 7).count(),
+                        "repeat-pattern paste is undoable");
                 app.setTrackRepeatForTest(7, false);
                 assertFalse(app.tracksForTest().get(7).repeat());
                 assertTrue(app.hitsForTest().stream().filter(hit -> hit.track() == 7).count() > before,
