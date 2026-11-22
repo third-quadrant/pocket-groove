@@ -2,59 +2,146 @@ package io.pocketgroove;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import java.nio.file.*;
-import java.io.*;
-import java.util.*;
-import java.util.zip.*;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class ProjectIOTest {
     @TempDir Path dir;
+
     static Beat.Project project() {
-        var pads = new ArrayList<Beat.Pad>();
-        for (int i=0;i<6;i++) pads.add(new Beat.Pad("소리 " + i, "DIGIT" + (i+1), "wav", new byte[]{1,2,3}));
-        return new Beat.Project(pads, List.of(new Beat.Hit(2, 1.5)), 4, 120, -3);
+        var tracks = new ArrayList<Beat.Track>();
+        String[] keys = {"1", "2", "3", "4", "5", "6", "7", "Q"};
+        for (int i = 0; i < keys.length; i++) {
+            tracks.add(new Beat.Track("Track " + i, keys[i], "wav",
+                    new byte[]{(byte) (i + 1), 2, 3}, i - 3,
+                    i == 2 ? Beat.PitchMode.PITCH_SHIFT : Beat.PitchMode.VARISPEED));
+        }
+        return new Beat.Project(tracks, List.of(
+                new Beat.Hit(2, 1.5, 0.35, 7),
+                new Beat.Hit(7, 0.25, 1.0, -12)), 4, 120, -3, 12);
     }
-    @Test void portableProjectRetainsSamplesKeysAndBeatTiming() throws Exception {
-        Path path=dir.resolve("비트.mdrum");
+
+    @Test void portableProjectRetainsDynamicTracksSamplesKeysVelocityAndTiming() throws Exception {
+        Path path = dir.resolve("8 tracks.mdrum");
         ProjectIO.save(path, project());
-        var loaded=ProjectIO.load(path);
+        var loaded = ProjectIO.load(path);
+        assertEquals(8, loaded.tracks().size());
         assertEquals(project().hits(), loaded.hits());
-        assertEquals("소리 2", loaded.pads().get(2).name());
-        assertEquals("DIGIT3", loaded.pads().get(2).key());
-        assertArrayEquals(new byte[]{1,2,3}, loaded.pads().get(2).audio());
+        assertEquals("Track 2", loaded.tracks().get(2).name());
+        assertEquals("3", loaded.tracks().get(2).key());
+        assertEquals("Q", loaded.tracks().get(7).key());
+        assertArrayEquals(new byte[]{3, 2, 3}, loaded.tracks().get(2).audio());
+        assertEquals(-1, loaded.tracks().get(2).pitch());
+        assertEquals(Beat.PitchMode.PITCH_SHIFT, loaded.tracks().get(2).pitchMode());
+        assertEquals(Beat.PitchMode.VARISPEED, loaded.tracks().get(3).pitchMode());
+        assertEquals(4, loaded.tracks().get(7).pitch());
+        assertEquals(7, loaded.hits().get(1).pitch(), 0.00001);
+        assertEquals(-12, loaded.hits().get(0).pitch(), 0.00001);
         assertEquals(-3, loaded.pitch());
+        assertEquals(12, loaded.bars());
     }
+
+    @Test void versionOneProjectsStillLoadAsSixTracksWithFullVelocityHits() throws Exception {
+        Path path = dir.resolve("legacy.mdrum");
+        var props = new java.util.Properties();
+        props.setProperty("version", "1");
+        props.setProperty("bpm", "100");
+        props.setProperty("pitch", "0");
+        props.setProperty("length", "16");
+        props.setProperty("hits", "1");
+        props.setProperty("hit.0", "3,2.5");
+        for (int i = 0; i < 6; i++) {
+            props.setProperty("pad." + i + ".name", "Old " + i);
+            props.setProperty("pad." + i + ".key", Integer.toString(i + 1));
+            props.setProperty("pad." + i + ".format", "wav");
+        }
+        try (var zip = new ZipOutputStream(Files.newOutputStream(path))) {
+            for (int i = 0; i < 6; i++) {
+                zip.putNextEntry(new ZipEntry("sounds/" + i)); zip.write(new byte[]{1, 2}); zip.closeEntry();
+            }
+            zip.putNextEntry(new ZipEntry("project.properties")); props.store(zip, "v1"); zip.closeEntry();
+        }
+        var loaded = ProjectIO.load(path);
+        assertEquals(6, loaded.tracks().size());
+        assertEquals(0, loaded.tracks().get(0).pitch());
+        assertEquals(Beat.PitchMode.VARISPEED, loaded.tracks().get(0).pitchMode());
+        assertEquals(16, loaded.bars());
+        assertEquals(List.of(new Beat.Hit(3, 2.5, 1.0)), loaded.hits());
+    }
+
+    @Test void versionTwoProjectsLoadWithZeroTrackPitch() throws Exception {
+        Path path = dir.resolve("v2.mdrum");
+        var props = new java.util.Properties();
+        props.setProperty("version", "2");
+        props.setProperty("tracks", "1");
+        props.setProperty("bpm", "100");
+        props.setProperty("pitch", "0");
+        props.setProperty("length", "4");
+        props.setProperty("hits", "1");
+        props.setProperty("hit.0", "0,1.0,0.8");
+        props.setProperty("track.0.name", "Old Kick");
+        props.setProperty("track.0.key", "1");
+        props.setProperty("track.0.format", "wav");
+        try (var zip = new ZipOutputStream(Files.newOutputStream(path))) {
+            zip.putNextEntry(new ZipEntry("sounds/0")); zip.write(new byte[]{1, 2}); zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("project.properties")); props.store(zip, "v2"); zip.closeEntry();
+        }
+        var loaded = ProjectIO.load(path);
+        assertEquals(0, loaded.tracks().get(0).pitch());
+        assertEquals(16, loaded.bars());
+        assertEquals(0.8, loaded.hits().get(0).velocity(), 0.00001);
+    }
+
     @Test void malformedArchiveIsRejectedWithoutExtractingPaths() throws Exception {
-        Path path=dir.resolve("bad.mdrum");
-        try (var z=new ZipOutputStream(Files.newOutputStream(path))) {
-            z.putNextEntry(new ZipEntry("../escaped.txt")); z.write(1); z.closeEntry();
+        Path path = dir.resolve("bad.mdrum");
+        try (var zip = new ZipOutputStream(Files.newOutputStream(path))) {
+            zip.putNextEntry(new ZipEntry("../escaped.txt")); zip.write(1); zip.closeEntry();
         }
         assertThrows(IOException.class, () -> ProjectIO.load(path));
         assertFalse(Files.exists(dir.getParent().resolve("escaped.txt")));
     }
+
     @Test void standardZipDirectoryEntriesDoNotInvalidateProject() throws Exception {
-        Path original=dir.resolve("original.mdrum"), repacked=dir.resolve("repacked.mdrum");
-        ProjectIO.save(original,project());
-        try(var input=new ZipFile(original.toFile());var output=new ZipOutputStream(Files.newOutputStream(repacked))) {
-            output.putNextEntry(new ZipEntry("sounds/"));output.closeEntry();
-            for(var entry:Collections.list(input.entries())) {
+        Path original = dir.resolve("original.mdrum"), repacked = dir.resolve("repacked.mdrum");
+        ProjectIO.save(original, project());
+        try (var input = new ZipFile(original.toFile());
+             var output = new ZipOutputStream(Files.newOutputStream(repacked))) {
+            output.putNextEntry(new ZipEntry("sounds/")); output.closeEntry();
+            for (var entry : Collections.list(input.entries())) {
                 output.putNextEntry(new ZipEntry(entry.getName()));
-                try(var data=input.getInputStream(entry)){data.transferTo(output);}
+                try (var data = input.getInputStream(entry)) { data.transferTo(output); }
                 output.closeEntry();
             }
         }
-        assertEquals(project().hits(),ProjectIO.load(repacked).hits());
+        assertEquals(project().hits(), ProjectIO.load(repacked).hits());
     }
+
     @Test void outOfRangeHitsAndDuplicateBindingsAreRejected() {
-        var p=project();
-        assertThrows(IllegalArgumentException.class, () -> new Beat.Project(p.pads(), List.of(new Beat.Hit(0,4)),4,120,0));
-        var pads=new ArrayList<>(p.pads()); pads.set(1,pads.get(0));
-        assertThrows(IllegalArgumentException.class, () -> new Beat.Project(pads,p.hits(),4,120,0));
+        var p = project();
+        assertThrows(IllegalArgumentException.class,
+                () -> new Beat.Project(p.tracks(), List.of(new Beat.Hit(8, 1)), 4, 120, 0));
+        var tracks = new ArrayList<>(p.tracks());
+        tracks.set(1, new Beat.Track("duplicate", "1", "wav", new byte[]{1}));
+        assertThrows(IllegalArgumentException.class,
+                () -> new Beat.Project(tracks, p.hits(), 4, 120, 0));
     }
+
     @Test void failedSaveDoesNotReplaceExistingDestination() throws Exception {
-        Path path=dir.resolve("folder.mdrum"); Files.createDirectory(path); Files.writeString(path.resolve("keep"),"safe");
+        Path path = dir.resolve("folder.mdrum");
+        Files.createDirectory(path);
+        Files.writeString(path.resolve("keep"), "safe");
         assertThrows(IOException.class, () -> ProjectIO.save(path, project()));
-        assertEquals("safe",Files.readString(path.resolve("keep")));
+        assertEquals("safe", Files.readString(path.resolve("keep")));
     }
 }

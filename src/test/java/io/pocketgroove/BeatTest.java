@@ -1,25 +1,54 @@
 package io.pocketgroove;
 
 import org.junit.jupiter.api.Test;
+
 import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class BeatTest {
-    @Test void loopBoundaryFiresOnceAndPreservesSimultaneousHits() {
-        var hits = List.of(new Beat.Hit(0, 0), new Beat.Hit(1, 0), new Beat.Hit(2, 3.5));
-        assertEquals(List.of(0, 1), Beat.crossed(hits, 4, -0.001, 0));
-        assertEquals(List.of(2, 0, 1), Beat.crossed(hits, 4, 3, 4));
-        assertTrue(Beat.crossed(hits, 4, 4, 4.1).isEmpty());
+    @Test void projectsMayHaveOneToThirtyTwoTracks() {
+        var track = new Beat.Track("Kick", "1", "wav", new byte[]{1});
+        assertDoesNotThrow(() -> new Beat.Project(List.of(track), List.of(), 4, 120, 0));
+
+        var tracks = new java.util.ArrayList<Beat.Track>();
+        for (int i = 0; i < Beat.MAX_TRACKS; i++) {
+            tracks.add(new Beat.Track("Track " + i, Integer.toHexString(i), "wav", new byte[]{1}));
+        }
+        assertDoesNotThrow(() -> new Beat.Project(tracks, List.of(), 4, 120, 0));
+        tracks.add(new Beat.Track("Too many", "x", "wav", new byte[]{1}));
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Project(tracks, List.of(), 4, 120, 0));
     }
-    @Test void tempoControlsEventSpacingWithoutChangingPitch() {
-        assertEquals(2, Beat.elapsedBeats(1_000_000_000L, 120));
-        assertEquals(1, Beat.elapsedBeats(1_000_000_000L, 60));
-        assertEquals(2, Beat.pitchRate(12), 0.00001);
-        assertEquals(0.5, Beat.pitchRate(-12), 0.00001);
+
+    @Test void hitsCarryTrackBeatAndVelocityAndAreSorted() {
+        var track = new Beat.Track("Kick", "1", "wav", new byte[]{1});
+        var other = new Beat.Track("Snare", "2", "wav", new byte[]{1});
+        var project = new Beat.Project(List.of(track, other), List.of(
+                new Beat.Hit(1, 2.0, 0.4),
+                new Beat.Hit(0, 1.0, 0.9),
+                new Beat.Hit(0, 1.0, 0.7)), 4, 120, 0);
+        assertEquals(0.9, project.hits().get(0).velocity(), 0.00001);
+        assertEquals(0.7, project.hits().get(1).velocity(), 0.00001);
+        assertEquals(1, project.hits().get(2).track());
     }
-    @Test void invalidEventsAndNonFiniteTempoAreRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new Beat.Hit(6, 0));
+
+    @Test void invalidTracksHitsAndSettingsAreRejected() {
+        var track = new Beat.Track("Kick", "1", "wav", new byte[]{1});
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Hit(-1, 0));
         assertThrows(IllegalArgumentException.class, () -> new Beat.Hit(0, Double.NaN));
-        assertThrows(IllegalArgumentException.class, () -> new Beat.Project(List.of(), List.of(), 4, Double.NaN, 0));
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Hit(0, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Hit(0, 0, 1.1));
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Hit(0, 0, 1, 25));
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Hit(0, 0, 1, -25));
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Project(List.of(track),
+                List.of(new Beat.Hit(1, 0)), 4, 120, 0));
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Project(List.of(track, track),
+                List.of(), 4, 120, 0));
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Project(List.of(track),
+                List.of(new Beat.Hit(0, 4)), 4, 120, 0));
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Project(List.of(track),
+                List.of(), 8, 120, 0, 1));
+        assertThrows(IllegalArgumentException.class, () -> new Beat.Project(List.of(track),
+                List.of(), 4, 120, 0, 513));
     }
 }

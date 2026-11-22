@@ -24,6 +24,10 @@ def render(kind, duration):
             value = .66 * high * math.exp(-t * 15) + .36 * math.sin(2 * math.pi * 185 * t) * math.exp(-t * 24)
         elif kind == "hat":
             value = high * math.exp(-t * 43)
+        elif kind == "openhat":
+            value = high * math.exp(-t * 10) * .8 + noise * math.sin(2 * math.pi * 7300 * t) * math.exp(-t * 8) * .2
+        elif kind == "perc":
+            value = .62 * high * math.exp(-t * 55) + .45 * math.sin(2 * math.pi * 1850 * t) * math.exp(-t * 38)
         elif kind == "clap":
             env = sum(math.exp(-(t - s) * 95) for s in (0, .012, .025) if t >= s)
             value = high * (env * .48 + .35 * math.exp(-t * 14))
@@ -39,13 +43,13 @@ def render(kind, duration):
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    for kind, duration in (("kick", .65), ("snare", .45), ("hat", .18), ("clap", .45), ("tom", .7), ("ride", 1.2)):
+    for kind, duration in (("kick", .65), ("snare", .45), ("hat", .18), ("openhat", .5), ("clap", .45), ("tom", .7), ("perc", .22)):
         pcm = render(kind, duration)
         assert len(pcm) > 1000 and any(pcm)
         with wave.open(str(OUT / f"{kind}.wav"), "wb") as f:
             f.setparams((1, 2, RATE, 0, "NONE", "not compressed"))
             f.writeframes(pcm)
-    print("Generated and checked 6 original mono 44.1 kHz percussion samples.")
+    print("Generated and checked 7 original mono 44.1 kHz percussion samples.")
 
 if __name__ == "__main__":
     main()
