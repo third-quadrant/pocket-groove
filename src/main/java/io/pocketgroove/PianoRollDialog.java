@@ -371,8 +371,14 @@ final class PianoRollDialog {
                 int midi = midiFor(offset);
                 int pitchClass = Math.floorMod(midi, 12);
                 boolean black = isBlack(pitchClass);
-                gc.setFill(DawStyle.alpha(Color.web("#AEB5BE"), .55));
-                gc.fillRect(0, y + ROW_H - .5, KEY_W, .5);
+                if (!black) {
+                    gc.setFill(DawStyle.alpha(Color.web("#AEB5BE"), .62));
+                    gc.fillRect(0, y + ROW_H - .5, KEY_W, .5);
+                    if (pitchClass == 4 || pitchClass == 11) {
+                        gc.setFill(DawStyle.alpha(Color.web("#8D959F"), .78));
+                        gc.fillRect(0, y + ROW_H - 1.2, KEY_W, 1);
+                    }
+                }
                 if (black) {
                     double blackWidth = KEY_W * .62;
                     gc.setFill(DawStyle.alpha(Color.BLACK, .26));
