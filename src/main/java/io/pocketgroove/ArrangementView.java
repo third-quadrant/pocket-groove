@@ -483,7 +483,10 @@ final class ArrangementView extends Region {
             gc.setFont(DawStyle.ui(9));
             gc.setFill(DawStyle.DIM);
             gc.setTextAlign(TextAlignment.LEFT);
-            gc.fillText(count == 0 ? "empty lane" : count + " hits", 45, y + 45);
+            String detail = count == 0 ? "empty lane"
+                    : count + (track.instrument() == Beat.Instrument.MELODY ? " notes" : " hits");
+            if (track.instrument() == Beat.Instrument.MELODY) detail = "MELODY · " + detail;
+            gc.fillText(detail, 45, y + 45);
             gc.setFont(DawStyle.display(8));
             gc.setTextAlign(TextAlignment.RIGHT);
             gc.fillText(track.pitchMode() == Beat.PitchMode.PITCH_SHIFT ? "PITCH" : "VAR",
@@ -544,7 +547,8 @@ final class ArrangementView extends Region {
                     gc.setFill(DawStyle.alpha(color, .9));
                     gc.setFont(DawStyle.display(8));
                     gc.setTextAlign(TextAlignment.LEFT);
-                    gc.fillText("A", left + 7, y + 12);
+                    gc.fillText(tracks.get(trackIndex).instrument() == Beat.Instrument.MELODY
+                            ? "MELODY" : "A", left + 7, y + 12);
                 }
                 var trackNotes = trackIndex < notesByTrack.size() ? notesByTrack.get(trackIndex) : List.<Beat.Hit>of();
                 for (var hit : trackNotes) {

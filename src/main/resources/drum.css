@@ -589,3 +589,22 @@
     -fx-font-size: 10px;
     -fx-text-fill: #D27C6F;
 }
+
+.piano-toolbar {
+    -fx-background-color: #12151A;
+    -fx-border-color: transparent transparent #262B33 transparent;
+    -fx-border-width: 0 0 1 0;
+}
+.piano-toolbar .separator .line {
+    -fx-border-color: #2B313A;
+    -fx-border-width: 0 0 0 1;
+}
+.piano-roll {
+    -fx-background-color: #0F1114;
+}
+.piano-footer {
+    -fx-background-color: #12151A;
+    -fx-border-color: #262B33 transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+    -fx-alignment: center-left;
+}

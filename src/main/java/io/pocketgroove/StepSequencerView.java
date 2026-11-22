@@ -183,7 +183,11 @@ final class StepSequencerView extends Region {
         gc.fillText(track.name(), 30, 26);
         gc.setFont(DawStyle.display(9));
         gc.setFill(DawStyle.MUTED);
-        gc.fillText("PATTERN A", 30, 37);
+        if (track.instrument() == Beat.Instrument.MELODY) {
+            gc.fillText("MELODY · BASE MIDI " + track.baseMidiNote(), 30, 37);
+        } else {
+            gc.fillText("DRUM · PATTERN A", 30, 37);
+        }
 
         boolean active = cells.active()[selectedStep];
         double velocity = cells.velocity()[selectedStep];

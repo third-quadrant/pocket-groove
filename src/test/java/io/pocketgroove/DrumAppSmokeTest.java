@@ -244,23 +244,29 @@ class DrumAppSmokeTest {
                 window.getScene().getRoot().layout();
                 var view = window.getScene().getRoot().lookup(".piano-roll");
                 var canvas = (Canvas) ((Parent) view).getChildrenUnmodifiable().get(0);
+                double stepWidth = (canvas.getWidth() - 72) / 16.0;
+                double stepX = 72 + stepWidth * .5;
                 int beforeNotes = app.currentProjectForTest().hits().size();
-                fireMouse(canvas, MouseEvent.MOUSE_PRESSED, 80, 26 + 24 * 12 + 6);
-                fireMouse(canvas, MouseEvent.MOUSE_RELEASED, 80, 26 + 24 * 12 + 6);
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED, stepX, 26 + 24 * 12 + 6);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED, stepX, 26 + 24 * 12 + 6);
                 assertEquals(beforeNotes + 1, app.currentProjectForTest().hits().size(),
                         "clicking the piano roll adds a note to the shared project");
                 var firstMelody = app.currentProjectForTest().hits().stream()
                         .filter(hit -> hit.track() == 7).toList();
                 assertEquals(1, firstMelody.size());
                 assertEquals(0, firstMelody.get(0).pitch(), 0.001);
-                fireMouse(canvas, MouseEvent.MOUSE_PRESSED, 80, 26 + 20 * 12 + 6);
-                fireMouse(canvas, MouseEvent.MOUSE_RELEASED, 80, 26 + 20 * 12 + 6);
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED, stepX, 26 + 20 * 12 + 6);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED, stepX, 26 + 20 * 12 + 6);
                 assertEquals(beforeNotes + 2, app.currentProjectForTest().hits().size(),
                         "a second pitch at the same step forms a chord");
                 assertEquals(List.of(0.0, 4.0),
                         app.currentProjectForTest().hits().stream()
                                 .filter(hit -> hit.track() == 7)
                                 .map(Beat.Hit::pitch).toList());
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED, 72 + stepWidth * 2.5, 26 + 17 * 12 + 6);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED, 72 + stepWidth * 2.5, 26 + 17 * 12 + 6);
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED, 72 + stepWidth * 4.5, 26 + 12 * 12 + 6);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED, 72 + stepWidth * 4.5, 26 + 12 * 12 + 6);
                 capture(window.getScene(), "piano-roll");
                 return null;
             });

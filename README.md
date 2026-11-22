@@ -4,6 +4,12 @@
 
 소리는 타격마다 파일을 다시 여는 대신, 미리 PCM으로 준비한 뒤 계속 열린 오디오 출력에 즉시 더합니다. 멜로디의 고품질 피치는 Signalsmith Stretch로 미리 렌더링해 캐시하고, 실시간 재생과 WAV 내보내기가 같은 PCM을 사용합니다.
 
+## 화면
+
+![멜로디 트랙과 스텝 시퀀서](docs/screenshots/desktop-melody.png)
+
+![멜로디 전용 피아노 롤](docs/screenshots/piano-roll.png)
+
 ## 실행
 
 Windows x64 배포 ZIP을 **전체 압축 해제**하고 `PocketGroove/PocketGroove.exe`를 실행하세요. Java 설치가 필요 없습니다. `app`과 `runtime` 폴더가 필요하므로 exe만 따로 옮기지 마세요. 저장소에서 직접 빌드하면 실행 파일은 `dist/PocketGroove-0.6.3/PocketGroove/PocketGroove.exe`에 만들어집니다.
