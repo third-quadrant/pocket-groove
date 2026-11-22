@@ -13,7 +13,7 @@ import java.util.Locale;
 /** Standard MIDI File (format 1) export for the selected bar range. */
 final class MidiExporter {
     private static final int DIVISION = 480;
-    private static final int CHANNEL = 9;
+    private static final int DRUM_CHANNEL = 9;
 
     private MidiExporter() {}
 
@@ -39,10 +39,18 @@ final class MidiExporter {
         conductor.finish(endTick);
         writeChunk(file, "MTrk", conductor.bytes());
 
+        int melodyChannel = 0;
         for (int trackIndex = 0; trackIndex < project.tracks().size(); trackIndex++) {
+            var track = project.tracks().get(trackIndex);
+            int channel;
+            if (track.instrument() == Beat.Instrument.MELODY) {
+                channel = melodyChannel;
+                melodyChannel = nextMelodicChannel(melodyChannel);
+            } else {
+                channel = DRUM_CHANNEL;
+            }
             var writer = new EventWriter();
-            writer.meta(0, 0x03, project.tracks().get(trackIndex).name()
-                    .getBytes(StandardCharsets.UTF_8));
+            writer.meta(0, 0x03, track.name().getBytes(StandardCharsets.UTF_8));
             var events = new ArrayList<NoteEvent>();
             int firstCycle = (int) Math.floor(startBeat / project.length());
             int lastCycle = (int) Math.ceil(endBeat / project.length());
@@ -53,26 +61,29 @@ final class MidiExporter {
                     double beat = cycleStart + hit.beat();
                     if (beat < startBeat - 1e-9 || beat >= endBeat - 1e-9) continue;
                     int tick = (int) Math.round((beat - startBeat) * DIVISION);
-                    int pitch = (int) Math.round(project.pitch()
-                            + project.tracks().get(trackIndex).pitch() + hit.pitch());
-                    int note = clamp(baseNote(project.tracks().get(trackIndex).name(), trackIndex) + pitch);
+                    int pitch = (int) Math.round(project.pitch() + track.pitch() + hit.pitch());
+                    int note = clamp(track.baseMidiNote() + pitch);
                     int velocity = Math.max(1, Math.min(127, (int) Math.round(hit.velocity() * 127)));
-                    events.add(new NoteEvent(tick, true, note, velocity));
-                    events.add(new NoteEvent(Math.min(endTick, tick + 30), false, note, 0));
+                    int lengthTicks = Math.max(1, (int) Math.round(hit.length() * DIVISION));
+                    int offTick = Math.min(endTick, tick + lengthTicks);
+                    events.add(new NoteEvent(tick, true, note, velocity, channel));
+                    events.add(new NoteEvent(offTick, false, note, 0, channel));
                 }
             }
             events.sort(Comparator.comparingInt(NoteEvent::tick)
                     .thenComparing(event -> event.on ? 1 : 0)
                     .thenComparingInt(NoteEvent::note));
-            for (var event : events) writer.note(event.tick, event.on, event.note, event.velocity);
+            for (var event : events)
+                writer.note(event.tick, event.on, event.note, event.velocity, event.channel);
             writer.finish(endTick);
             writeChunk(file, "MTrk", writer.bytes());
         }
         Files.write(destination, file.toByteArray());
     }
 
+    /** Legacy name/index fallback used only when reading v1-v6 projects. */
     static int baseNote(String name, int trackIndex) {
-        String value = name.toLowerCase(Locale.ROOT);
+        String value = name == null ? "" : name.toLowerCase(Locale.ROOT);
         if (value.contains("kick")) return 36;
         if (value.contains("snare")) return 38;
         if (value.contains("clap")) return 39;
@@ -89,6 +100,12 @@ final class MidiExporter {
         return Math.max(0, Math.min(127, value));
     }
 
+    private static int nextMelodicChannel(int channel) {
+        int next = channel + 1;
+        if (next == DRUM_CHANNEL) next++;
+        return next > 15 ? 0 : next;
+    }
+
     private static void writeChunk(ByteArrayOutputStream out, String id, byte[] body) throws IOException {
         out.writeBytes(id.getBytes(StandardCharsets.ISO_8859_1));
         out.writeBytes(new byte[]{
@@ -97,7 +114,7 @@ final class MidiExporter {
         out.writeBytes(body);
     }
 
-    private record NoteEvent(int tick, boolean on, int note, int velocity) {}
+    private record NoteEvent(int tick, boolean on, int note, int velocity, int channel) {}
 
     private static final class EventWriter {
         private final ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -111,9 +128,9 @@ final class MidiExporter {
             out.writeBytes(data);
         }
 
-        void note(int at, boolean on, int note, int velocity) {
+        void note(int at, boolean on, int note, int velocity, int channel) {
             delta(at);
-            out.write((on ? 0x90 : 0x80) | CHANNEL);
+            out.write((on ? 0x90 : 0x80) | channel);
             out.write(note);
             out.write(velocity);
         }

@@ -70,6 +70,36 @@ class MidiExporterTest {
         assertEquals(1920, sequence.getTickLength());
     }
 
+    @Test void melodyChordsUseTheBaseNoteAndTheEditedNoteLength() throws Exception {
+        var track = new Beat.Track("Cello", "1", "wav", new byte[]{1}, 0,
+                Beat.PitchMode.PITCH_SHIFT, Beat.Instrument.MELODY, 60, true);
+        var project = new Beat.Project(List.of(track), List.of(
+                new Beat.Hit(0, 0, .8, 0, .5),
+                new Beat.Hit(0, 0, .7, 4, .5),
+                new Beat.Hit(0, 0, .6, 7, 1.0)), 4, 120, 0, 1);
+        Path midi = dir.resolve("chord.mid");
+        MidiExporter.export(midi, project, 1, 1);
+        Sequence sequence = MidiSystem.getSequence(midi.toFile());
+        var ons = new java.util.TreeMap<Integer, Long>();
+        var offs = new java.util.TreeMap<Integer, Long>();
+        for (var midiTrack : sequence.getTracks()) {
+            for (int i = 0; i < midiTrack.size(); i++) {
+                MidiEvent event = midiTrack.get(i);
+                if (event.getMessage() instanceof ShortMessage message
+                        && message.getChannel() == 0) {
+                    if (message.getCommand() == ShortMessage.NOTE_ON)
+                        ons.put(message.getData1(), event.getTick());
+                    if (message.getCommand() == ShortMessage.NOTE_OFF)
+                        offs.put(message.getData1(), event.getTick());
+                }
+            }
+        }
+        assertEquals(List.of(60, 64, 67), List.copyOf(ons.keySet()));
+        assertEquals(240L, offs.get(60) - ons.get(60), "half-beat note = 240 ticks");
+        assertEquals(240L, offs.get(64) - ons.get(64));
+        assertEquals(480L, offs.get(67) - ons.get(67), "one-beat note = 480 ticks");
+    }
+
     @Test void invalidRangeIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> MidiExporter.export(
                 dir.resolve("bad.mid"), project(), 0, 1));

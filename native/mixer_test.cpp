@@ -98,11 +98,40 @@ int main() {
         shifted->setTrackCount(1);
         shifted->samples[0]=constant(.25f,100);
         shifted->samples[0].pitchShift=true;
+        shifted->samples[0].variants.push_back({120, std::vector<float>(200,.25f)});
         shifted->submit({CommandType::Hit,0,1,12});
         shifted->render(lowAudio.data(),100);
         int shiftedFrames=0;for(int i=0;i<100;i++)if(lowAudio[i*2]>0.05f)shiftedFrames++;
-        check(shiftedFrames>=95,
+        check(shiftedFrames>=99,
               "pitch shift keeps the sample duration while changing pitch");
+    }
+
+    {
+        auto p=std::make_unique<Mixer>(48000);
+        p->setTrackCount(1);
+        p->samples[0].pitchShift=true;
+        p->samples[0].variants.push_back({0, constant(.2f,100).pcm});
+        p->samples[0].variants.push_back({120, constant(.4f,100).pcm});
+        p->submit({CommandType::Hit,0,1,0});p->render(out,4);
+        check(std::abs(out[0]-.2f)<.00001,"prepared pitch variant plays at the requested note");
+        p->clearVoices();
+        p->submit({CommandType::Hit,0,1,12});p->render(out,4);
+        check(std::abs(out[0]-.4f)<.00001,"prepared variant is selected by the total semitone offset");
+        p->clearVoices();
+        p->submit({CommandType::Parameters,0,1,12});p->render(out,1);
+        p->submit({CommandType::Hit,0,1,0});p->render(out,4);
+        check(std::abs(out[0]-.4f)<.00001,"global pitch is included in variant selection");
+        p->clearVoices();
+        p->submit({CommandType::Hit,0,1,5});p->render(out,4);
+        check(out[0]==0,"a note without a prepared variant stays silent rather than mistuned");
+    }
+    {
+        auto p=std::make_unique<Mixer>(48000);
+        p->setTrackCount(1);
+        p->samples[0].pitchShift=true;
+        p->samples[0].variants.push_back({0, constant(.2f,100).pcm});
+        p->setLoop({{0,0,1,0}},1,120);p->submit({CommandType::Play});p->render(out,4);
+        check(std::abs(out[0]-.2f)<.00001,"loop playback uses the prepared variant");
     }
 
     m->submit({CommandType::Stop});m->render(out,1);

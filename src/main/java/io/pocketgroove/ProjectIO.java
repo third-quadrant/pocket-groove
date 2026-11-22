@@ -6,7 +6,7 @@ import java.util.*;
 import java.util.zip.*;
 
 public final class ProjectIO {
-    private static final int VERSION = 6;
+    private static final int VERSION = 7;
 
     public static void save(Path destination, Beat.Project project) throws IOException {
         Path target = destination.toAbsolutePath();
@@ -28,6 +28,9 @@ public final class ProjectIO {
                     props.setProperty("track." + i + ".format", track.format());
                     props.setProperty("track." + i + ".pitch", Double.toString(track.pitch()));
                     props.setProperty("track." + i + ".mode", track.pitchMode().name());
+                    props.setProperty("track." + i + ".instrument", track.instrument().name());
+                    props.setProperty("track." + i + ".base", Integer.toString(track.baseMidiNote()));
+                    props.setProperty("track." + i + ".formant", Boolean.toString(track.formantPreserve()));
                     zip.putNextEntry(new ZipEntry("sounds/" + i));
                     zip.write(track.audio());
                     zip.closeEntry();
@@ -35,10 +38,10 @@ public final class ProjectIO {
                 for (int i = 0; i < project.hits().size(); i++) {
                     var hit = project.hits().get(i);
                     props.setProperty("hit." + i, hit.track() + "," + hit.beat() + "," + hit.velocity()
-                            + "," + hit.pitch());
+                            + "," + hit.pitch() + "," + hit.length());
                 }
                 zip.putNextEntry(new ZipEntry("project.properties"));
-                props.store(zip, "Pocket Groove project v6");
+                props.store(zip, "Pocket Groove project v7");
                 zip.closeEntry();
             }
             try {
@@ -71,22 +74,36 @@ public final class ProjectIO {
                         throw new IOException("트랙 피치 방식이 올바르지 않습니다.", e);
                     }
                 }
-                tracks.add(new Beat.Track(
-                        props.getProperty(prefix + i + ".name"),
-                        props.getProperty(prefix + i + ".key"),
+                Beat.Instrument instrument = Beat.Instrument.DRUM;
+                if (version >= 7 && props.getProperty(prefix + i + ".instrument") != null) {
+                    try {
+                        instrument = Beat.Instrument.valueOf(props.getProperty(prefix + i + ".instrument"));
+                    } catch (RuntimeException e) {
+                        throw new IOException("트랙 악기 종류가 올바르지 않습니다.", e);
+                    }
+                }
+                String name = props.getProperty(prefix + i + ".name");
+                String key = props.getProperty(prefix + i + ".key");
+                int base = version >= 7 && props.getProperty(prefix + i + ".base") != null
+                        ? integer(props, prefix + i + ".base", "기준 MIDI 음이 올바르지 않습니다.", 0, 127)
+                        : instrument == Beat.Instrument.MELODY ? 60 : MidiExporter.baseNote(name, i);
+                boolean formant = version >= 7
+                        && bool(props, prefix + i + ".formant", "Formant 설정이 올바르지 않습니다.");
+                tracks.add(new Beat.Track(name, key,
                         props.getProperty(prefix + i + ".format"),
                         read(zip, "sounds/" + i, Beat.MAX_SAMPLE_BYTES),
-                        trackPitch, mode));
+                        trackPitch, mode, instrument, base, formant));
             }
             int hitCount = integer(props, "hits", "타격 수가 올바르지 않습니다.", 0, 100_000);
             var hits = new ArrayList<Beat.Hit>();
             for (int i = 0; i < hitCount; i++) {
                 String[] parts = props.getProperty("hit." + i, "").split(",");
-                if (parts.length < 2 || parts.length > 4) throw new IOException("손상된 연주 기록입니다.");
+                if (parts.length < 2 || parts.length > 5) throw new IOException("손상된 연주 기록입니다.");
                 double velocity = parts.length >= 3 ? Double.parseDouble(parts[2]) : 1.0;
-                double pitch = parts.length == 4 ? Double.parseDouble(parts[3]) : 0;
+                double pitch = parts.length >= 4 ? Double.parseDouble(parts[3]) : 0;
+                double length = parts.length >= 5 ? Double.parseDouble(parts[4]) : Beat.DEFAULT_NOTE_LENGTH;
                 hits.add(new Beat.Hit(Integer.parseInt(parts[0]), Double.parseDouble(parts[1]),
-                        velocity, pitch));
+                        velocity, pitch, length));
             }
             double length = finite(props, "length", "루프 길이가 올바르지 않습니다.", 0.01, 512);
             int bars = props.getProperty("bars") == null
@@ -120,6 +137,14 @@ public final class ProjectIO {
         } catch (NumberFormatException e) {
             throw new IOException(error, e);
         }
+    }
+
+    private static boolean bool(Properties props, String key, String error) throws IOException {
+        String value = props.getProperty(key);
+        if (value == null) return false;
+        if (value.equalsIgnoreCase("true")) return true;
+        if (value.equalsIgnoreCase("false")) return false;
+        throw new IOException(error);
     }
 
     private static byte[] read(ZipFile zip, String name, int limit) throws IOException {

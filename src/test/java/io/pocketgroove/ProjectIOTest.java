@@ -99,8 +99,86 @@ class ProjectIOTest {
         }
         var loaded = ProjectIO.load(path);
         assertEquals(0, loaded.tracks().get(0).pitch());
+        assertEquals(Beat.Instrument.DRUM, loaded.tracks().get(0).instrument());
+        assertEquals(36, loaded.tracks().get(0).baseMidiNote());
+        assertFalse(loaded.tracks().get(0).formantPreserve());
+        assertEquals(Beat.DEFAULT_NOTE_LENGTH, loaded.hits().get(0).length(), 0.00001);
         assertEquals(16, loaded.bars());
         assertEquals(0.8, loaded.hits().get(0).velocity(), 0.00001);
+    }
+
+    @Test void versionSevenStoresMelodyBaseFormantAndChordLengths() throws Exception {
+        Path path = dir.resolve("melody.mdrum");
+        var track = new Beat.Track("Cello", "1", "wav", new byte[]{1, 2, 3}, 2,
+                Beat.PitchMode.PITCH_SHIFT, Beat.Instrument.MELODY, 60, true);
+        var chord = List.of(
+                new Beat.Hit(0, 0.25, 0.8, 0, 0.5),
+                new Beat.Hit(0, 0.25, 0.7, 4, 0.5),
+                new Beat.Hit(0, 0.25, 0.6, 7, 0.75));
+        ProjectIO.save(path, new Beat.Project(List.of(track), chord, 4, 120, 0, 16));
+        var loaded = ProjectIO.load(path);
+        var restored = loaded.tracks().get(0);
+        assertEquals(Beat.Instrument.MELODY, restored.instrument());
+        assertEquals(60, restored.baseMidiNote());
+        assertTrue(restored.formantPreserve());
+        assertEquals(Beat.PitchMode.PITCH_SHIFT, restored.pitchMode());
+        assertEquals(3, loaded.hits().size());
+        assertEquals(List.of(0.0, 4.0, 7.0), loaded.hits().stream().map(Beat.Hit::pitch).toList());
+        assertEquals(List.of(0.5, 0.5, 0.75), loaded.hits().stream().map(Beat.Hit::length).toList());
+    }
+
+    @Test void damagedChordLengthIsRejectedWithoutLoading() throws Exception {
+        Path path = dir.resolve("bad-length.mdrum");
+        var props = new java.util.Properties();
+        props.setProperty("version", "7");
+        props.setProperty("tracks", "1");
+        props.setProperty("bpm", "100");
+        props.setProperty("pitch", "0");
+        props.setProperty("length", "4");
+        props.setProperty("hits", "1");
+        props.setProperty("hit.0", "0,0,1,0,0");
+        props.setProperty("track.0.name", "Kick");
+        props.setProperty("track.0.key", "1");
+        props.setProperty("track.0.format", "wav");
+        props.setProperty("track.0.instrument", "DRUM");
+        props.setProperty("track.0.base", "36");
+        props.setProperty("track.0.formant", "false");
+        try (var zip = new ZipOutputStream(Files.newOutputStream(path))) {
+            zip.putNextEntry(new ZipEntry("sounds/0")); zip.write(new byte[]{1, 2}); zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("project.properties")); props.store(zip, "v7"); zip.closeEntry();
+        }
+        assertThrows(IOException.class, () -> ProjectIO.load(path));
+    }
+
+    @Test void versionSixProjectsGetDrumDefaultsAndKeepTheirPitchMode() throws Exception {
+        Path path = dir.resolve("v6.mdrum");
+        var props = new java.util.Properties();
+        props.setProperty("version", "6");
+        props.setProperty("tracks", "1");
+        props.setProperty("bpm", "110");
+        props.setProperty("pitch", "2");
+        props.setProperty("length", "4");
+        props.setProperty("bars", "16");
+        props.setProperty("hits", "1");
+        props.setProperty("hit.0", "0,1.5,0.7,5");
+        props.setProperty("track.0.name", "Old Snare");
+        props.setProperty("track.0.key", "2");
+        props.setProperty("track.0.format", "wav");
+        props.setProperty("track.0.pitch", "3");
+        props.setProperty("track.0.mode", "PITCH_SHIFT");
+        try (var zip = new ZipOutputStream(Files.newOutputStream(path))) {
+            zip.putNextEntry(new ZipEntry("sounds/0")); zip.write(new byte[]{1, 2}); zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("project.properties")); props.store(zip, "v6"); zip.closeEntry();
+        }
+        var loaded = ProjectIO.load(path);
+        var track = loaded.tracks().get(0);
+        assertEquals(Beat.Instrument.DRUM, track.instrument());
+        assertEquals(38, track.baseMidiNote());
+        assertFalse(track.formantPreserve());
+        assertEquals(Beat.PitchMode.PITCH_SHIFT, track.pitchMode());
+        assertEquals(3, track.pitch(), 0.00001);
+        assertEquals(5, loaded.hits().get(0).pitch(), 0.00001);
+        assertEquals(Beat.DEFAULT_NOTE_LENGTH, loaded.hits().get(0).length(), 0.00001);
     }
 
     @Test void malformedArchiveIsRejectedWithoutExtractingPaths() throws Exception {

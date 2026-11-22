@@ -2,12 +2,17 @@ package io.pocketgroove;
 
 import javafx.application.Platform;
 import javafx.event.Event;
+import javafx.event.EventType;
+import javafx.scene.Parent;
 import javafx.scene.Scene;
+import javafx.scene.canvas.Canvas;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.Spinner;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.stage.Stage;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -214,6 +219,71 @@ class DrumAppSmokeTest {
                 return null;
             });
 
+            fx(() -> { app.addMelodyFromFileForTest(sample); return null; });
+            deadline = System.nanoTime() + 20_000_000_000L;
+            while (System.nanoTime() < deadline) {
+                int count = fx(() -> ((ArrangementView) stage.getScene().lookup(".arrangement")).trackCount());
+                if (count == 8) break;
+                Thread.sleep(60);
+            }
+            var pianoWindow = new javafx.stage.Stage[1];
+            fx(() -> {
+                var melody = app.currentProjectForTest().tracks().get(7);
+                assertEquals(Beat.Instrument.MELODY, melody.instrument());
+                assertEquals(60, melody.baseMidiNote());
+                assertEquals(Beat.PitchMode.PITCH_SHIFT, melody.pitchMode());
+                app.openPianoRollForTest(7);
+                assertTrue(app.pianoRollShowingForTest(), "a melody track should open its piano roll");
+                var window = javafx.stage.Window.getWindows().stream()
+                        .filter(w -> w.isShowing() && w != stage).findFirst().orElseThrow();
+                pianoWindow[0] = (javafx.stage.Stage) window;
+                assertTrue(pianoWindow[0].getTitle().contains("음표 편집"));
+                window.getScene().getRoot().applyCss();
+                window.getScene().getRoot().layout();
+                var view = window.getScene().getRoot().lookup(".piano-roll");
+                var canvas = (Canvas) ((Parent) view).getChildrenUnmodifiable().get(0);
+                int beforeNotes = app.currentProjectForTest().hits().size();
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED, 80, 26 + 24 * 12 + 6);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED, 80, 26 + 24 * 12 + 6);
+                assertEquals(beforeNotes + 1, app.currentProjectForTest().hits().size(),
+                        "clicking the piano roll adds a note to the shared project");
+                var firstMelody = app.currentProjectForTest().hits().stream()
+                        .filter(hit -> hit.track() == 7).toList();
+                assertEquals(1, firstMelody.size());
+                assertEquals(0, firstMelody.get(0).pitch(), 0.001);
+                fireMouse(canvas, MouseEvent.MOUSE_PRESSED, 80, 26 + 20 * 12 + 6);
+                fireMouse(canvas, MouseEvent.MOUSE_RELEASED, 80, 26 + 20 * 12 + 6);
+                assertEquals(beforeNotes + 2, app.currentProjectForTest().hits().size(),
+                        "a second pitch at the same step forms a chord");
+                assertEquals(List.of(0.0, 4.0),
+                        app.currentProjectForTest().hits().stream()
+                                .filter(hit -> hit.track() == 7)
+                                .map(Beat.Hit::pitch).toList());
+                return null;
+            });
+            Thread.sleep(500);
+            fx(() -> {
+                ((Button) stage.getScene().lookup("#transport-play")).fire();
+                return null;
+            });
+            Thread.sleep(300);
+            fx(() -> {
+                assertNotEquals("001 · 01 · 01",
+                        ((Label) stage.getScene().lookup("#position")).getText(),
+                        "the melody track should not stop the transport");
+                ((Button) stage.getScene().lookup("#transport-stop")).fire();
+                pianoWindow[0].close();
+                assertFalse(app.pianoRollShowingForTest());
+                app.removeTrackAt(7);
+                return null;
+            });
+            deadline = System.nanoTime() + 20_000_000_000L;
+            while (System.nanoTime() < deadline) {
+                int count = fx(() -> ((ArrangementView) stage.getScene().lookup(".arrangement")).trackCount());
+                if (count == 7) break;
+                Thread.sleep(60);
+            }
+
             Path saved = Path.of("target/ui-save.mdrum");
             Files.deleteIfExists(saved);
             fx(() -> { app.saveProjectToForTest(saved); return null; });
@@ -323,6 +393,13 @@ class DrumAppSmokeTest {
 
     private static void fireKey(javafx.scene.Node target, KeyCode code) {
         fireKey(target, code, false);
+    }
+
+    private static void fireMouse(Canvas canvas, EventType<MouseEvent> type, double x, double y) {
+        var point = canvas.localToScene(x, y);
+        Event.fireEvent(canvas, new MouseEvent(type, point.getX(), point.getY(),
+                point.getX(), point.getY(), MouseButton.PRIMARY, 1,
+                false, false, false, false, true, false, false, true, false, false, null));
     }
 
     private static void fireKey(javafx.scene.Node target, KeyCode code, boolean shift) {

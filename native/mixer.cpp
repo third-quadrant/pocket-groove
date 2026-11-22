@@ -4,17 +4,6 @@
 #include <stdexcept>
 
 namespace groove {
-namespace {
-inline void readPcm(const std::vector<float>& pcm,double position,float& left,float& right){
-    size_t frames=pcm.size()/2;
-    if(position<0 || position>=static_cast<double>(frames)){left=right=0;return;}
-    size_t index=static_cast<size_t>(position);
-    size_t next=std::min(index+1,frames-1);
-    float fraction=static_cast<float>(position-index);
-    left=pcm[index*2]+(pcm[next*2]-pcm[index*2])*fraction;
-    right=pcm[index*2+1]+(pcm[next*2+1]-pcm[index*2+1])*fraction;
-}
-}
 bool Mixer::submit(const Command& c) noexcept {
     auto write=write_.load(std::memory_order_relaxed),next=(write+1)%QueueSize;
     if(next==read_.load(std::memory_order_acquire)){dropped_.fetch_add(1,std::memory_order_relaxed);return false;}
@@ -23,7 +12,22 @@ bool Mixer::submit(const Command& c) noexcept {
 void Mixer::setTrackCount(size_t count) {
     if(count<1 || count>MaxTracks) throw std::invalid_argument("Invalid track count");
     trackCount_=count;
-    for(auto&v:voices_)v.active=false;
+    for(auto&s:samples)s.variants.clear();
+    clearVoices();
+    publish();
+}
+void Mixer::setVariants(std::vector<std::pair<int,std::vector<PitchVariant>>> variants) {
+    for(const auto& entry:variants){
+        if(entry.first<0 || static_cast<size_t>(entry.first)>=trackCount_)
+            throw std::invalid_argument("Invalid variant track");
+        for(const auto& variant:entry.second){
+            if(variant.tenth< -480 || variant.tenth>480 || variant.pcm.empty() || variant.pcm.size()%2)
+                throw std::invalid_argument("Invalid pitch variant");
+        }
+    }
+    for(auto&s:samples)s.variants.clear();
+    for(auto& entry:variants)samples[entry.first].variants=std::move(entry.second);
+    clearVoices();
     publish();
 }
 void Mixer::setLoop(const std::vector<Hit>& hits,double length,double bpm) {
@@ -56,19 +60,28 @@ void Mixer::loadLoop(const std::vector<Hit>& hits,double length,double bpm,bool 
 }
 std::vector<Hit> Mixer::copyHits() const { return {hits_.begin(),hits_.begin()+count_}; }
 void Mixer::trigger(int track,double gain,double semitones) noexcept {
-    if(track<0 || static_cast<size_t>(track)>=trackCount_ || samples[track].pcm.empty())return;
+    if(track<0 || static_cast<size_t>(track)>=trackCount_)return;
+    const auto& sample=samples[track];
+    if(sample.pcm.empty() && sample.variants.empty())return;
+    double semitoneTotal=pitch_+sample.pitch+semitones;
+    int variant=-1;
+    if(sample.pitchShift){
+        if(sample.variants.empty())return;
+        int wanted=static_cast<int>(std::lround(semitoneTotal*10));
+        for(size_t i=0;i<sample.variants.size();++i){
+            if(sample.variants[i].tenth==wanted){variant=static_cast<int>(i);break;}
+        }
+        if(variant<0)return; // the background cache has not prepared this note yet
+    }
     Voice* target=nullptr;
     for(auto&v:voices_)if(!v.active){target=&v;break;}
     if(!target)target=&*std::min_element(voices_.begin(),voices_.end(),[](const Voice&a,const Voice&b){return a.age<b.age;});
-    double ratio=std::pow(2.0,(pitch_+samples[track].pitch+semitones)/12.0);
-    double scale=samples[track].rate/rate_;
+    double ratio=std::pow(2.0,semitoneTotal/12.0);
+    double scale=sample.rate/rate_;
     target->track=track;
     target->position=0;
-    target->ratio=ratio;
-    target->pitchShift=samples[track].pitchShift;
-    target->step=target->pitchShift?1.0:scale*ratio;
-    double outputLength=samples[track].pcm.size()/2.0/scale;
-    target->hop=std::min(512.0,std::max(16.0,outputLength/4.0));
+    target->variant=variant;
+    target->step=variant>=0?1.0:scale*ratio;
     target->gain=static_cast<float>(gain);
     target->active=true;
     target->age=++age_;
@@ -147,35 +160,27 @@ void Mixer::render(float* out,size_t frames) noexcept {
         }
         float l=0,r=0;
         for(auto&v:voices_)if(v.active){
-            const auto& pcm=samples[v.track].pcm;
-            if(pcm.empty()){v.active=false;continue;}
-            if(v.pitchShift){
+            if(v.variant>=0){
+                const auto& variants=samples[v.track].variants;
+                if(v.variant>=static_cast<int>(variants.size())){v.active=false;continue;}
+                const auto& pcm=variants[v.variant].pcm;
                 size_t length=pcm.size()/2;
-                double scale=samples[v.track].rate/rate_;
-                double outputLength=length/scale;
-                if(v.position>=outputLength){v.active=false;continue;}
-                const double hop=v.hop;
-                double grain=std::floor(v.position/hop);
-                double fraction=v.position-grain*hop;
-                double weight=grain<1?1.0:0.5+0.5*(fraction/hop);
-                double maxStart=std::max(0.0,length-hop*v.ratio*scale);
-                double currentStart=std::min(grain*hop*scale,maxStart);
-                double previousStart=std::min((grain-1)*hop*scale,maxStart);
-                float currentLeft=0,currentRight=0,previousLeft=0,previousRight=0;
-                readPcm(pcm,currentStart+fraction*v.ratio*scale,currentLeft,currentRight);
-                if(grain>=1)readPcm(pcm,previousStart+(hop+fraction)*v.ratio*scale,
-                                     previousLeft,previousRight);
-                l+=(currentLeft*weight+previousLeft*(1.0-weight))*v.gain;
-                r+=(currentRight*weight+previousRight*(1.0-weight))*v.gain;
-                v.position+=1;
-            }else{
-                size_t length=pcm.size()/2,index=static_cast<size_t>(v.position);
-                if(index>=length){v.active=false;continue;}
+                if(v.position>=length){v.active=false;continue;}
+                size_t index=static_cast<size_t>(v.position);
                 size_t next=std::min(index+1,length-1);float fraction=static_cast<float>(v.position-index);
                 l+=(pcm[index*2]+(pcm[next*2]-pcm[index*2])*fraction)*v.gain;
                 r+=(pcm[index*2+1]+(pcm[next*2+1]-pcm[index*2+1])*fraction)*v.gain;
-                v.position+=v.step;
+                v.position+=1;
+                continue;
             }
+            const auto& pcm=samples[v.track].pcm;
+            if(pcm.empty()){v.active=false;continue;}
+            size_t length=pcm.size()/2,index=static_cast<size_t>(v.position);
+            if(index>=length){v.active=false;continue;}
+            size_t next=std::min(index+1,length-1);float fraction=static_cast<float>(v.position-index);
+            l+=(pcm[index*2]+(pcm[next*2]-pcm[index*2])*fraction)*v.gain;
+            r+=(pcm[index*2+1]+(pcm[next*2+1]-pcm[index*2+1])*fraction)*v.gain;
+            v.position+=v.step;
         }
         out[f*2]=std::clamp(l,-1.f,1.f);out[f*2+1]=std::clamp(r,-1.f,1.f);
         if(mode_){phase_+=bpm_/(60.0*rate_);if(mode_==2 && phase_+1e-10>=length_){phase_=std::max(0.0,phase_-length_);next_=0;}}

@@ -20,7 +20,7 @@ Native JavaFX/CSS, one Operate surface. The workspace is arranged like a DAW, no
 - Top: transport with REC/PLAY/STOP, position `bar · beat · sixteenth`, BPM, 4/4, loop length, master, pitch and output settings. Export defaults to sample-exact WAV; MIDI remains selectable.
 - Second row: a Korean hamburger file menu, undo/redo, selected track and key, track pitch, key/sound actions, add/remove track, song length (`BARS` + `+ 바`) and timeline zoom.
 - Center: a single Canvas workspace with fixed track headers and a horizontally scrollable bar/beat/16th grid bounded by the project bar count. Repeated pattern clips preview each track's hits, velocity and note pitch.
-- Bottom: selected-track step sequencer with 16th cells, a velocity lane and stepped note-pitch lane.
+- Bottom: selected-track step sequencer with 16th cells, a velocity lane and stepped note-pitch lane. Melody tracks can also open a piano roll with a real MIDI keyboard on the left, multiple notes per step, note lengths and drag editing; the piano roll edits the same track data as the main sequence.
 - Footer: operation status, project file, engine description and last keyboard input.
 - At compact width the toolbar shrinks its spacing instead of clipping controls; tracks scroll vertically and the step grid may scroll horizontally.
 

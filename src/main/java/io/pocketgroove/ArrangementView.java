@@ -37,6 +37,7 @@ final class ArrangementView extends Region {
     private List<List<Beat.Hit>> notesByTrack = List.of();
     private Consumer<Integer> onTrackSelected = ignored -> {};
     private IntConsumer onAudition = ignored -> {};
+    private IntConsumer onTrackEdit = ignored -> {};
     private DoubleConsumer onEditBeat = ignored -> {};
     private BiConsumer<Integer, Beat.PitchMode> onPitchModeChanged = (track, mode) -> {};
     private double loopBeats = 4;
@@ -68,6 +69,16 @@ final class ArrangementView extends Region {
         canvas.setOnMouseExited(e -> { hoverTrack = -1; draw(); });
         canvas.setOnMousePressed(this::mousePressed);
         canvas.setOnMouseDragged(this::mouseDragged);
+        canvas.setOnMouseClicked(e -> {
+            if (e.getButton() == MouseButton.PRIMARY && e.getClickCount() == 2) {
+                int row = trackAt(e.getY());
+                if (row >= 0) {
+                    selectTrack(row);
+                    onTrackEdit.accept(row);
+                    e.consume();
+                }
+            }
+        });
         canvas.setOnMouseReleased(e -> {
             panning = false;
             canvas.setCursor(javafx.scene.Cursor.DEFAULT);
@@ -102,6 +113,7 @@ final class ArrangementView extends Region {
 
     void setOnTrackSelected(Consumer<Integer> listener) { onTrackSelected = listener == null ? ignored -> {} : listener; }
     void setOnAudition(IntConsumer listener) { onAudition = listener == null ? ignored -> {} : listener; }
+    void setOnTrackEdit(IntConsumer listener) { onTrackEdit = listener == null ? ignored -> {} : listener; }
     void setOnEditBeat(DoubleConsumer listener) { onEditBeat = listener == null ? ignored -> {} : listener; }
     void setOnPitchModeChanged(BiConsumer<Integer, Beat.PitchMode> listener) {
         onPitchModeChanged = listener == null ? (track, mode) -> {} : listener;
@@ -231,7 +243,13 @@ final class ArrangementView extends Region {
         pitchShift.setSelected(track.pitchMode() == Beat.PitchMode.PITCH_SHIFT);
         varispeed.setOnAction(e -> onPitchModeChanged.accept(index, Beat.PitchMode.VARISPEED));
         pitchShift.setOnAction(e -> onPitchModeChanged.accept(index, Beat.PitchMode.PITCH_SHIFT));
-        var menu = new ContextMenu(varispeed, pitchShift,
+        var menu = new ContextMenu();
+        if (track.instrument() == Beat.Instrument.MELODY) {
+            var edit = new javafx.scene.control.MenuItem("음표 편집…");
+            edit.setOnAction(e -> onTrackEdit.accept(index));
+            menu.getItems().addAll(edit, new SeparatorMenuItem());
+        }
+        menu.getItems().addAll(varispeed, pitchShift,
                 new SeparatorMenuItem(),
                 new MenuItemHeader("길이 유지: 음높이만 변경 / 속도 변경: 피치에 따라 길이도 변경"));
         menu.show(canvas, screenX, screenY);

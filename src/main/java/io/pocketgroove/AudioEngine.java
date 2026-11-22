@@ -40,6 +40,13 @@ final class AudioEngine implements AutoCloseable {
     synchronized void install(List<Sounds.Pcm> samples, List<Double> pitches,
                               List<Boolean> pitchShift, List<Beat.Hit> hits,
                               double length, double bpm) throws IOException {
+        install(samples, pitches, pitchShift, hits, length, bpm, List.of());
+    }
+
+    synchronized void install(List<Sounds.Pcm> samples, List<Double> pitches,
+                              List<Boolean> pitchShift, List<Beat.Hit> hits,
+                              double length, double bpm,
+                              List<PitchCache.TrackVariants> variants) throws IOException {
         requireOpen();
         if (samples.size() < 1 || samples.size() > Beat.MAX_TRACKS
                 || pitches.size() != samples.size() || pitchShift.size() != samples.size())
@@ -55,8 +62,15 @@ final class AudioEngine implements AutoCloseable {
             modes[i] = pitchShift.get(i);
             validate(tune[i], -12, 12);
         }
+        var flattened = flattenVariants(variants);
         nInstall(handle, data, rates, tune, modes, tracks(hits), beats(hits), velocities(hits),
-                notePitches(hits), length, bpm);
+                notePitches(hits), length, bpm, flattened.tracks, flattened.tenths, flattened.pcm);
+    }
+
+    synchronized void setVariants(List<PitchCache.TrackVariants> variants) throws IOException {
+        requireOpen();
+        var flattened = flattenVariants(variants);
+        nSetVariants(handle, flattened.tracks, flattened.tenths, flattened.pcm);
     }
 
     synchronized void setLoop(List<Beat.Hit> hits, double length, double bpm) throws IOException {
@@ -143,6 +157,33 @@ final class AudioEngine implements AutoCloseable {
     private static double[] velocities(List<Beat.Hit> hits) { return hits.stream().mapToDouble(Beat.Hit::velocity).toArray(); }
     private static double[] notePitches(List<Beat.Hit> hits) { return hits.stream().mapToDouble(Beat.Hit::pitch).toArray(); }
 
+    private record FlatVariants(int[] tracks, int[] tenths, float[][] pcm) {}
+
+    private static FlatVariants flattenVariants(List<PitchCache.TrackVariants> variants) {
+        var tracks = new ArrayList<Integer>();
+        var tenths = new ArrayList<Integer>();
+        var pcm = new ArrayList<float[]>();
+        if (variants != null) {
+            for (var track : variants) {
+                if (track == null) throw new IllegalArgumentException("피치 트랙이 올바르지 않습니다.");
+                if (track.track() < 0 || track.track() >= Beat.MAX_TRACKS)
+                    throw new IllegalArgumentException("피치 트랙 번호가 올바르지 않습니다.");
+                for (var variant : track.variants()) {
+                    if (variant == null || variant.pcm() == null || variant.pcm().length == 0
+                            || variant.pcm().length % 2 != 0
+                            || variant.tenth() < -480 || variant.tenth() > 480)
+                        throw new IllegalArgumentException("피치 PCM 또는 음높이가 올바르지 않습니다.");
+                    tracks.add(track.track());
+                    tenths.add(variant.tenth());
+                    pcm.add(variant.pcm());
+                }
+            }
+        }
+        return new FlatVariants(tracks.stream().mapToInt(Integer::intValue).toArray(),
+                tenths.stream().mapToInt(Integer::intValue).toArray(),
+                pcm.toArray(float[][]::new));
+    }
+
     private void requireOpen() {
         if (handle == 0) throw new IllegalStateException("오디오 엔진이 닫혔습니다.");
     }
@@ -160,7 +201,11 @@ final class AudioEngine implements AutoCloseable {
     private static native void nInstall(long handle, float[][] samples, int[] rates, double[] trackPitches,
                                         boolean[] pitchShift, int[] tracks, double[] beats,
                                         double[] velocities, double[] notePitches,
-                                        double length, double bpm) throws IOException;
+                                        double length, double bpm,
+                                        int[] variantTracks, int[] variantTenths,
+                                        float[][] variantPcm) throws IOException;
+    private static native void nSetVariants(long handle, int[] variantTracks, int[] variantTenths,
+                                            float[][] variantPcm) throws IOException;
     private static native void nSetLoop(long handle, int[] tracks, double[] beats, double[] velocities,
                                        double[] notePitches, double length, double bpm) throws IOException;
     private static native void nCommand(long handle, int type, int track, double value, double extra, boolean wait);

@@ -54,6 +54,36 @@ class PatternTest {
         assertThrows(IllegalArgumentException.class, () -> Pattern.setPitch(added, 0, 0, 25));
     }
 
+    @Test void oneStepStoresAndEditsMultipleNotes() {
+        var empty = List.<Beat.Hit>of();
+        var c = Pattern.addNote(empty, 0, 1, 0, .8, .5);
+        var e = Pattern.addNote(c, 0, 1, 4, .7, .5);
+        var g = Pattern.addNote(e, 0, 1, 7, .6, .75);
+        assertEquals(3, Pattern.chordSize(g, 0, 1));
+        assertEquals(List.of(0.0, 4.0, 7.0), Pattern.notes(g, 0, 1).stream()
+                .map(Beat.Hit::pitch).toList());
+
+        var updated = Pattern.updateNote(g, 0, 1, 4, 5, .9, 1.0);
+        assertEquals(List.of(0.0, 5.0, 7.0), Pattern.notes(updated, 0, 1).stream()
+                .map(Beat.Hit::pitch).toList());
+        assertEquals(1.0, Pattern.notes(updated, 0, 1).get(1).length(), 0.00001);
+
+        var removed = Pattern.removeNote(updated, 0, 1, 5);
+        assertEquals(2, Pattern.chordSize(removed, 0, 1));
+        assertTrue(Pattern.notes(removed, 0, 1).stream().noneMatch(h -> h.pitch() == 5));
+    }
+
+    @Test void transposingAChordMovesEveryNoteByTheSameAmount() {
+        var chord = List.of(
+                new Beat.Hit(0, 0.25, .8, 0, .25),
+                new Beat.Hit(0, 0.25, .7, 4, .25),
+                new Beat.Hit(0, 0.25, .6, 7, .25));
+        var moved = Pattern.setPitch(chord, 0, 1, 2);
+        assertEquals(List.of(2.0, 6.0, 9.0), Pattern.notes(moved, 0, 1).stream()
+                .map(Beat.Hit::pitch).toList());
+        assertEquals(3, Pattern.notes(moved, 0, 1).size());
+    }
+
     @Test void outOfRangeStepsTracksAndTimesAreRejected() {
         assertThrows(IllegalArgumentException.class, () -> Pattern.toggle(List.of(), 0, 16, 4, 0.8));
         assertThrows(IllegalArgumentException.class, () -> Pattern.toggle(List.of(), -1, 0, 4, 0.8));

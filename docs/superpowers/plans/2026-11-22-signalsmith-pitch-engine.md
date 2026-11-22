@@ -1,5 +1,7 @@
 # Signalsmith 기반 피치 악기 Implementation Plan
 
+**Status:** Stages 1–6 implemented in commits `a96004c` (Stage 1) and the melody/pitch integration commit. See the final report for verification results.
+
 **Goal:** 모든 WAV/MP3/AIFF 샘플을 MIDI 노트 기반 피치 악기로 연주하고, Signalsmith Stretch 1.3.2로 고품질 피치를 사전 렌더링해 실시간 재생과 WAV 내보내기가 같은 PCM을 쓰게 한다. 기존 드럼·프로젝트·MP3 가져오기는 유지하고 MP3 내보내기는 제거한다.
 
 **Architecture:** `Beat.Track`에 기본 MIDI 노트·피치 방식·formant 설정을 더하고, `Beat.Hit`의 반복으로 같은 스텝 화음을 표현한다. Java 백그라운드 `PitchCache`가 `(트랙, 반음, formant)`별 PCM을 네이티브 Signalsmith로 만들고, 네이티브 믹서와 WAV `OfflineMix`가 같은 캐시 PCM을 읽는다. 오디오 콜백은 파일 I/O·DSP·캐시 생성을 하지 않는다.

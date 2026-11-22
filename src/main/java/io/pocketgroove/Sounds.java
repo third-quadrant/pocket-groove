@@ -58,6 +58,33 @@ final class Sounds {
         return new Pcm(Arrays.copyOfRange(pcm.stereo(),startFrame*2,endFrame*2),pcm.sampleRate());
     }
 
+    /** Linear-interpolated stereo resample; the duration is preserved. */
+    static Pcm resample(Pcm pcm, int targetRate) {
+        if (pcm == null) throw new IllegalArgumentException("오디오가 없습니다.");
+        if (targetRate < 8000 || targetRate > 192000)
+            throw new IllegalArgumentException("샘플레이트가 올바르지 않습니다.");
+        int sourceRate = pcm.sampleRate();
+        if (sourceRate == targetRate) return pcm;
+        int sourceFrames = pcm.stereo().length / 2;
+        int targetFrames = (int) Math.round(sourceFrames * (double) targetRate / sourceRate);
+        if (targetFrames < 1) throw new IllegalArgumentException("오디오가 너무 짧습니다.");
+        float[] source = pcm.stereo();
+        float[] out = new float[targetFrames * 2];
+        double ratio = (double) sourceRate / targetRate;
+        for (int i = 0; i < targetFrames; i++) {
+            double position = i * ratio;
+            int index = (int) position;
+            int next = Math.min(index + 1, sourceFrames - 1);
+            float fraction = (float) (position - index);
+            for (int channel = 0; channel < 2; channel++) {
+                float a = source[index * 2 + channel];
+                float b = source[next * 2 + channel];
+                out[i * 2 + channel] = a + (b - a) * fraction;
+            }
+        }
+        return new Pcm(out, targetRate);
+    }
+
     static byte[] pcmBytes(Pcm pcm) {
         int frames=pcm.stereo().length/2;
         byte[] raw=new byte[frames*4];

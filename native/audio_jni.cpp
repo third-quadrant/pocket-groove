@@ -112,6 +112,54 @@ bool stopStream(JNIEnv* env,Engine& e){
     if(stop!=paNoError&&stop!=paStreamIsStopped){throwJava(env,"java/io/IOException",Pa_GetErrorText(stop));return false;}
     return true;
 }
+std::vector<std::pair<int,std::vector<PitchVariant>>> variantEntries(
+        std::array<std::vector<PitchVariant>,MaxTracks>&& variants){
+    std::vector<std::pair<int,std::vector<PitchVariant>>> entries;
+    for(size_t i=0;i<MaxTracks;i++){
+        if(!variants[i].empty()) entries.emplace_back(static_cast<int>(i),std::move(variants[i]));
+    }
+    return entries;
+}
+bool readVariants(JNIEnv* env,jintArray variantTracks,jintArray variantTenths,jobjectArray variantArrays,
+                  size_t trackCount,std::array<std::vector<PitchVariant>,MaxTracks>& prepared,size_t& totalBytes){
+    if(!variantTracks||!variantTenths||!variantArrays)return false;
+    auto count=env->GetArrayLength(variantTracks);
+    if(count<0||env->GetArrayLength(variantTenths)!=count||env->GetArrayLength(variantArrays)!=count)return false;
+    jint* tracks=env->GetIntArrayElements(variantTracks,nullptr);
+    jint* tenths=env->GetIntArrayElements(variantTenths,nullptr);
+    if(!tracks||!tenths){
+        if(tracks)env->ReleaseIntArrayElements(variantTracks,tracks,JNI_ABORT);
+        if(tenths)env->ReleaseIntArrayElements(variantTenths,tenths,JNI_ABORT);
+        return false;
+    }
+    bool ok=true;
+    for(jsize i=0;i<count&&ok;i++){
+        if(tracks[i]<0||static_cast<size_t>(tracks[i])>=trackCount
+           ||tenths[i]< -480||tenths[i]>480){ok=false;break;}
+        auto& list=prepared[tracks[i]];
+        for(const auto& existing:list)if(existing.tenth==tenths[i]){ok=false;break;}
+        if(!ok)break;
+        auto arr=static_cast<jfloatArray>(env->GetObjectArrayElement(variantArrays,i));
+        if(!arr){ok=false;break;}
+        auto size=env->GetArrayLength(arr);
+        if(size<=0||size%2||static_cast<size_t>(size)>48*1024*1024){
+            env->DeleteLocalRef(arr);ok=false;break;
+        }
+        totalBytes+=static_cast<size_t>(size)*sizeof(float);
+        if(totalBytes>512u*1024u*1024u){env->DeleteLocalRef(arr);ok=false;break;}
+        PitchVariant variant;
+        variant.tenth=tenths[i];
+        variant.pcm.resize(static_cast<size_t>(size));
+        env->GetFloatArrayRegion(arr,0,size,variant.pcm.data());
+        env->DeleteLocalRef(arr);
+        if(env->ExceptionCheck()){ok=false;break;}
+        for(float v:variant.pcm)if(!std::isfinite(v)){ok=false;break;}
+        if(ok)list.push_back(std::move(variant));
+    }
+    env->ReleaseIntArrayElements(variantTracks,tracks,JNI_ABORT);
+    env->ReleaseIntArrayElements(variantTenths,tenths,JNI_ABORT);
+    return ok;
+}
 void restartStream(JNIEnv* env,Engine& e){
     auto start=Pa_StartStream(e.stream);
     if(start!=paNoError)throwJava(env,"java/io/IOException",Pa_GetErrorText(start));
@@ -181,7 +229,8 @@ extern "C" JNIEXPORT void JNICALL Java_io_pocketgroove_AudioEngine_nReconfigure(
 extern "C" JNIEXPORT void JNICALL Java_io_pocketgroove_AudioEngine_nInstall(
     JNIEnv* env,jclass,jlong handle,jobjectArray sampleArrays,jintArray rates,jdoubleArray trackPitches,
     jbooleanArray pitchShiftModes,jintArray tracks,jdoubleArray beats,jdoubleArray velocities,
-    jdoubleArray hitPitches,jdouble length,jdouble bpm) try {
+    jdoubleArray hitPitches,jdouble length,jdouble bpm,
+    jintArray variantTracks,jintArray variantTenths,jobjectArray variantArrays) try {
     auto e=acquire(env,handle);if(!e)return;
     if(!sampleArrays||!rates||!trackPitches||!pitchShiftModes
        ||env->GetArrayLength(sampleArrays)!=env->GetArrayLength(rates)
@@ -235,10 +284,17 @@ extern "C" JNIEXPORT void JNICALL Java_io_pocketgroove_AudioEngine_nInstall(
     env->ReleaseDoubleArrayElements(velocities,velocityValues,JNI_ABORT);
     env->ReleaseDoubleArrayElements(hitPitches,hitPitchValues,JNI_ABORT);
 
+    std::array<std::vector<PitchVariant>,MaxTracks> preparedVariants;size_t variantBytes=0;
+    if(!readVariants(env,variantTracks,variantTenths,variantArrays,static_cast<size_t>(trackCount),
+                     preparedVariants,variantBytes)){
+        throwArgument(env,"피치 PCM 또는 음높이가 올바르지 않습니다.");return;
+    }
+
     if(!stopStream(env,*e))return;
     try{
         e->mixer.setTrackCount(static_cast<size_t>(trackCount));
         for(int i=0;i<trackCount;i++)e->mixer.samples[i]=std::move(prepared[i]);
+        e->mixer.setVariants(variantEntries(std::move(preparedVariants)));
         e->mixer.setLoop(hits,length,bpm);
     } catch(...) {
         Pa_StartStream(e->stream);
@@ -277,6 +333,22 @@ extern "C" JNIEXPORT void JNICALL Java_io_pocketgroove_AudioEngine_nSetLoop(
 } catch(const std::bad_alloc&){throwJava(env,"java/lang/OutOfMemoryError","비트를 준비할 메모리가 부족합니다.");}
   catch(const std::exception& e){throwJava(env,"java/io/IOException",e.what());}
   catch(...){throwJava(env,"java/io/IOException","비트를 반영하지 못했습니다.");}
+
+extern "C" JNIEXPORT void JNICALL Java_io_pocketgroove_AudioEngine_nSetVariants(
+    JNIEnv* env,jclass,jlong handle,jintArray variantTracks,jintArray variantTenths,
+    jobjectArray variantArrays) try {
+    auto e=acquire(env,handle);if(!e)return;
+    std::array<std::vector<PitchVariant>,MaxTracks> prepared;size_t totalBytes=0;
+    if(!readVariants(env,variantTracks,variantTenths,variantArrays,e->mixer.trackCount(),prepared,totalBytes)){
+        throwArgument(env,"피치 PCM 또는 음높이가 올바르지 않습니다.");return;
+    }
+    if(!stopStream(env,*e))return;
+    try{e->mixer.setVariants(variantEntries(std::move(prepared)));}
+    catch(...){restartStream(env,*e);throwArgument(env,"피치 PCM을 반영하지 못했습니다.");return;}
+    restartStream(env,*e);
+} catch(const std::bad_alloc&){throwJava(env,"java/lang/OutOfMemoryError","피치 PCM을 준비할 메모리가 부족합니다.");}
+  catch(const std::exception& e){throwJava(env,"java/io/IOException",e.what());}
+  catch(...){throwJava(env,"java/io/IOException","피치 PCM을 반영하지 못했습니다.");}
 
 extern "C" JNIEXPORT void JNICALL Java_io_pocketgroove_AudioEngine_nCommand(JNIEnv* env,jclass,jlong handle,jint type,jint track,jdouble value,jdouble extra,jboolean wait){
     auto e=acquire(env,handle);if(!e)return;

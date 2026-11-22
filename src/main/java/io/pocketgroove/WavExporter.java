@@ -18,6 +18,11 @@ final class WavExporter {
 
     static void export(Path destination, Beat.Project project, double gain,
                        int startBar, int endBar) throws IOException {
+        export(destination, project, gain, startBar, endBar, null);
+    }
+
+    static void export(Path destination, Beat.Project project, double gain,
+                       int startBar, int endBar, PitchCache cache) throws IOException {
         long frames = OfflineMix.totalFrames(project, startBar, endBar);
         if (!Double.isFinite(gain) || gain < 0 || gain > 1)
             throw new IllegalArgumentException("출력 음량이 올바르지 않습니다.");
@@ -31,7 +36,7 @@ final class WavExporter {
         try {
             try (var out = new BufferedOutputStream(Files.newOutputStream(temp))) {
                 writeHeader(out, (int) dataSize);
-                OfflineMix.render(project, pcm, gain, startBar, endBar, (samples, count) -> {
+                OfflineMix.render(project, pcm, gain, startBar, endBar, cache, (samples, count) -> {
                     byte[] bytes = new byte[count * 8];
                     for (int i = 0; i < count * 2; i++) {
                         int bits = Float.floatToIntBits(samples[i]);

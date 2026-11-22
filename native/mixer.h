@@ -2,11 +2,18 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace groove {
 constexpr size_t MaxTracks=32, MaxHits=100000, MaxVoices=64, QueueSize=1024;
-struct Sample { std::vector<float> pcm; double rate=48000, pitch=0; bool pitchShift=false; };
+struct PitchVariant { int tenth=0; std::vector<float> pcm; };
+struct Sample {
+    std::vector<float> pcm;
+    double rate=48000,pitch=0;
+    bool pitchShift=false;
+    std::vector<PitchVariant> variants;
+};
 struct Hit { int track; double beat; double velocity; double pitch; };
 enum class CommandType { Hit, Stop, Play, Record, FinishRecord, Tempo, Parameters, TrackPitch, TrackMode };
 struct Command { CommandType type; int track=0; double value=0, extra=0; uint64_t sequence=0; };
@@ -19,6 +26,8 @@ public:
     void render(float* output, size_t frames) noexcept;
     // The following calls run only while the stream is stopped and no callback can run.
     void setTrackCount(size_t count);
+    void setVariants(std::vector<std::pair<int,std::vector<PitchVariant>>> variants);
+    void clearVoices() noexcept { for(auto&v:voices_)v.active=false; }
     void setLoop(const std::vector<Hit>& hits, double length, double bpm);
     void replaceLoop(const std::vector<Hit>& hits, double length, double bpm);
     std::vector<Hit> copyHits() const;
@@ -37,9 +46,10 @@ public:
 private:
     struct Voice {
         int track=0;
-        double position=0, step=1, ratio=1, hop=512;
+        double position=0, step=1;
         float gain=1;
-        bool active=false, pitchShift=false;
+        int variant=-1;
+        bool active=false;
         uint64_t age=0;
     };
     std::array<Voice,MaxVoices> voices_{};

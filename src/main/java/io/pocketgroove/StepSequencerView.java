@@ -188,13 +188,15 @@ final class StepSequencerView extends Region {
         boolean active = cells.active()[selectedStep];
         double velocity = cells.velocity()[selectedStep];
         double notePitch = cells.pitch()[selectedStep];
+        int chord = Pattern.chordSize(hits, trackIndex, selectedStep);
         gc.setTextAlign(TextAlignment.RIGHT);
         gc.setFont(DawStyle.display(10));
         gc.setFill(DawStyle.MUTED);
         int bar = selectedStep / 16 + 1;
         int step = selectedStep % 16 + 1;
-        gc.fillText(String.format("STEP %02d · BAR %02d   %s   NOTE %s   %d%%", step, bar,
-                active ? "ON" : "OFF", formatPitch(notePitch), Math.round(velocity * 100)), w - 16, 20);
+        gc.fillText(String.format("STEP %02d · BAR %02d   %s   NOTE %s   %d%%%s", step, bar,
+                active ? "ON" : "OFF", formatPitch(notePitch), Math.round(velocity * 100),
+                chord > 1 ? "   CHORD " + chord : ""), w - 16, 20);
         gc.setFont(DawStyle.ui(9));
         gc.setFill(DawStyle.DIM);
         gc.fillText((int) (loopBeats / 4) + " BAR · " + stepCount() + " STEPS", w - 16, 34);

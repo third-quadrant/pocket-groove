@@ -76,6 +76,33 @@ class AudioEngineTest {
         }
     }
 
+    @Test void nativeVariantInstallAcceptsPreparedChordPcm() throws Exception {
+        int rate = 44100;
+        int frames = rate / 10;
+        float[] stereo = new float[frames * 2];
+        for (int i = 0; i < frames; i++) {
+            float value = (float) (Math.sin(2 * Math.PI * 261.63 * i / rate) * .3);
+            stereo[i * 2] = value;
+            stereo[i * 2 + 1] = value;
+        }
+        var track = new Beat.Track("Cello", "1", "wav",
+                Sounds.wavBytes(new Sounds.Pcm(stereo, rate)), 0,
+                Beat.PitchMode.PITCH_SHIFT, Beat.Instrument.MELODY, 60, false);
+        var hits = List.of(new Beat.Hit(0, 0, .8, 0, .25),
+                new Beat.Hit(0, 0, .7, 4, .25),
+                new Beat.Hit(0, 0, .6, 7, .25));
+        var cache = new PitchCache();
+        var variants = cache.prepare(List.of(track), hits, 0);
+        try (var engine = AudioEngine.open(-1, false, 256)) {
+            engine.install(Sounds.decodeAll(List.of(track)), List.of(0.0), List.of(true),
+                    hits, 4, 120, variants.tracks());
+            engine.playLoop();
+            engine.setVariants(variants.tracks());
+            assertNotNull(engine.state());
+            engine.stopAll();
+        }
+    }
+
     @Test void closedHandleIsRejectedRatherThanDereferenced() throws Exception {
         var engine = AudioEngine.open(-1, false, 256);
         engine.close();

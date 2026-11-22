@@ -134,6 +134,10 @@ public final class DrumApp extends Application {
     private PauseTransition inputHint;
     private PauseTransition hitFlash;
     private PauseTransition loopSyncDelay;
+    private PauseTransition pitchRefreshDelay;
+    private final PitchCache pitchCache = new PitchCache();
+    private Stage pianoRoll;
+    private int pitchGeneration;
 
     @Override public void start(Stage stage) {
         this.stage = stage;
@@ -143,6 +147,7 @@ public final class DrumApp extends Application {
         arrangement = new ArrangementView();
         arrangement.setOnTrackSelected(this::selectTrack);
         arrangement.setOnAudition(this::hit);
+        arrangement.setOnTrackEdit(this::openPianoRoll);
         arrangement.setOnPitchModeChanged(this::changeTrackPitchMode);
         arrangement.setOnEditBeat(beat -> selectStep((int) Math.round(beat * Pattern.STEPS_PER_BEAT)));
         sequencer = new StepSequencerView();
@@ -191,6 +196,8 @@ public final class DrumApp extends Application {
         hitFlash.setOnFinished(e -> arrangement.clearFlash());
         loopSyncDelay = new PauseTransition(Duration.millis(45));
         loopSyncDelay.setOnFinished(e -> syncLoopNow());
+        pitchRefreshDelay = new PauseTransition(Duration.millis(140));
+        pitchRefreshDelay.setOnFinished(e -> refreshPitchNow());
 
         stage.focusedProperty().addListener((o, a, nowFocused) -> {
             focused = nowFocused;
@@ -353,6 +360,7 @@ public final class DrumApp extends Application {
             remember(new Beat.Project(tracks, hits, length, bpm.getValue(), a, projectBars),
                     selectedTrack, selectedStep, "master-pitch");
             if (audio != null) audio.parameters(master.getValue(), value);
+            schedulePitchRefresh();
             markDirty();
         });
         var pitchBox = field("PITCH", pitch);
@@ -546,6 +554,58 @@ public final class DrumApp extends Application {
 
     void selectTrackForTest(int index) { selectTrack(index); }
 
+    void addMelodyFromFileForTest(Path path) { addTrackFromFile(path, false, Beat.Instrument.MELODY); }
+
+    void openPianoRollForTest(int index) { openPianoRoll(index); }
+
+    boolean pianoRollShowingForTest() { return pianoRoll != null && pianoRoll.isShowing(); }
+
+    private void openPianoRoll(int index) {
+        if (busy || recording || index < 0 || index >= tracks.size()) return;
+        var track = tracks.get(index);
+        if (track.instrument() != Beat.Instrument.MELODY) {
+            status.setText("멜로디 악기 트랙에서만 음표 편집을 엽니다.");
+            return;
+        }
+        if (pianoRoll != null && pianoRoll.isShowing()) {
+            pianoRoll.toFront();
+            return;
+        }
+        selectTrack(index);
+        pianoRoll = PianoRollDialog.show(stage, track, index, hits, length, pitch.getValue(),
+                updated -> applyPianoRoll(index, updated),
+                (base, formant) -> applyMelodySettings(index, base, formant));
+    }
+
+    private void applyPianoRoll(int index, List<Beat.Hit> updated) {
+        if (busy || recording || index < 0 || index >= tracks.size()) return;
+        remember(projectSnapshot(), index, selectedStep, "piano-roll");
+        hits = List.copyOf(updated);
+        markDirty();
+        arrangement.setData(tracks, hits, length, projectBars, selectedTrack,
+                Pattern.stepBeat(selectedStep));
+        sequencer.setData(selectedTrack, tracks.get(selectedTrack), hits, length);
+        scheduleLoopSync();
+        schedulePitchRefresh();
+        status.setText("음표를 편집했습니다 · " + hits.size() + " notes");
+    }
+
+    private void applyMelodySettings(int index, int baseMidiNote, boolean formantPreserve) {
+        if (index < 0 || index >= tracks.size()) return;
+        var old = tracks.get(index);
+        if (old.baseMidiNote() == baseMidiNote && old.formantPreserve() == formantPreserve) return;
+        remember(projectSnapshot(), index, selectedStep, "instrument-settings");
+        var updated = new ArrayList<>(tracks);
+        updated.set(index, old.withInstrument(Beat.Instrument.MELODY, baseMidiNote)
+                .withFormantPreserve(formantPreserve));
+        tracks = List.copyOf(updated);
+        markDirty();
+        refreshUi();
+        schedulePitchRefresh();
+        status.setText("기본 음 MIDI " + baseMidiNote + " · Formant "
+                + (formantPreserve ? "보존" : "해제"));
+    }
+
     void setPitchModeForTest(int index, Beat.PitchMode mode) { changeTrackPitchMode(index, mode); }
 
     Beat.Project currentProjectForTest() { return projectSnapshot(); }
@@ -574,8 +634,7 @@ public final class DrumApp extends Application {
         if (old.pitchMode() == mode) return;
         remember(projectSnapshot(), selectedTrack, selectedStep, "pitch-mode");
         var updated = new ArrayList<>(tracks);
-        updated.set(index, new Beat.Track(old.name(), old.key(), old.format(), old.audio(),
-                old.pitch(), mode));
+        updated.set(index, old.withPitchMode(mode));
         tracks = List.copyOf(updated);
         if (audio != null) {
             try {
@@ -586,6 +645,7 @@ public final class DrumApp extends Application {
         }
         markDirty();
         refreshUi();
+        schedulePitchRefresh();
         status.setText(old.name() + " · " + (mode == Beat.PitchMode.PITCH_SHIFT
                 ? "Pitch Shift (길이 유지)" : "Varispeed (속도 변경)"));
     }
@@ -595,8 +655,7 @@ public final class DrumApp extends Application {
         var old = tracks.get(index);
         if (old.pitch() == value) return;
         var updated = new ArrayList<>(tracks);
-        updated.set(index, new Beat.Track(old.name(), old.key(), old.format(), old.audio(),
-                value, old.pitchMode()));
+        updated.set(index, old.withPitch(value));
         tracks = List.copyOf(updated);
         if (audio != null) {
             try {
@@ -607,6 +666,7 @@ public final class DrumApp extends Application {
         }
         markDirty();
         refreshUi();
+        schedulePitchRefresh();
         status.setText(old.name() + " 트랙 피치 " + (value > 0 ? "+" : "") + (int) value + "반음");
     }
 
@@ -629,6 +689,7 @@ public final class DrumApp extends Application {
         markDirty();
         arrangement.setData(tracks, hits, length, projectBars, selectedTrack, Pattern.stepBeat(selectedStep));
         scheduleLoopSync();
+        schedulePitchRefresh();
         status.setText("스텝을 편집했습니다 · " + hits.size() + " hits");
     }
 
@@ -637,6 +698,43 @@ public final class DrumApp extends Application {
             loopSyncDelay.stop();
             loopSyncDelay.playFromStart();
         }
+    }
+
+    private void schedulePitchRefresh() {
+        pitchGeneration++;
+        if (pitchRefreshDelay != null) {
+            pitchRefreshDelay.stop();
+            pitchRefreshDelay.playFromStart();
+        }
+    }
+
+    private void refreshPitchNow() {
+        if (closed || busy || recording || tracks.isEmpty()) return;
+        int generation = pitchGeneration;
+        var project = projectSnapshot();
+        io.submit(() -> {
+            try {
+                var result = pitchCache.prepare(project.tracks(), project.hits(), project.pitch());
+                Platform.runLater(() -> {
+                    if (closed || generation != pitchGeneration) return;
+                    if (result.rendered() <= 0) return;
+                    var engine = audio;
+                    if (engine == null) return;
+                    try {
+                        engine.setVariants(result.tracks());
+                    } catch (Exception e) {
+                        status.setText("피치 준비를 오디오에 반영하지 못했습니다.");
+                        return;
+                    }
+                    if (result.missing() > 0) status.setText(
+                            "피치 메모리 상한 · " + result.missing() + "개 음을 준비하지 못했습니다.");
+                });
+            } catch (Exception e) {
+                Platform.runLater(() -> {
+                    if (!closed) status.setText("피치를 준비하지 못했습니다: " + e.getMessage());
+                });
+            }
+        });
     }
 
     private void syncLoopNow() {
@@ -890,6 +988,7 @@ public final class DrumApp extends Application {
             selectedStep = Math.min(selectedStep, Math.max(0, Pattern.stepCount(length) - 1));
             refreshUi();
             markDirty();
+            schedulePitchRefresh();
         } catch (Exception e) {
             status.setText("녹음 내용을 읽지 못했습니다.");
         }
@@ -1039,8 +1138,7 @@ public final class DrumApp extends Application {
         remember(projectSnapshot(), selectedTrack, selectedStep, "key");
         var old = tracks.get(selectedTrack);
         var updated = new ArrayList<>(tracks);
-        updated.set(selectedTrack, new Beat.Track(old.name(), captured, old.format(), old.audio(),
-                old.pitch(), old.pitchMode()));
+        updated.set(selectedTrack, old.withKey(captured));
         tracks = List.copyOf(updated);
         learning = false;
         learn.setText("키 지정");
@@ -1133,18 +1231,34 @@ public final class DrumApp extends Application {
 
     private void addTrack() {
         if (busy || recording || playing || tracks.size() >= Beat.MAX_TRACKS) return;
-        var file = chooser("새 트랙 소리", "오디오 (최대 16 MB)", "*.wav", "*.mp3", "*.aiff", "*.aif")
+        var instrument = chooseInstrument();
+        if (instrument == null) return;
+        var file = chooser(instrument == Beat.Instrument.MELODY ? "멜로디 악기 추가" : "새 트랙 소리",
+                "오디오 (최대 16 MB)", "*.wav", "*.mp3", "*.aiff", "*.aif")
                 .showOpenDialog(stage);
-        if (file != null) addTrackFromFile(file.toPath(), true);
+        if (file != null) addTrackFromFile(file.toPath(), true, instrument);
     }
 
-    void addTrackFromFile(Path path) { addTrackFromFile(path, false); }
+    private Beat.Instrument chooseInstrument() {
+        var dialog = new javafx.scene.control.ChoiceDialog<>("드럼 트랙",
+                "드럼 트랙", "멜로디 악기");
+        dialog.initOwner(stage);
+        dialog.setTitle("트랙 추가");
+        dialog.setHeaderText("추가할 트랙 종류");
+        dialog.setContentText("악기");
+        dialog.getDialogPane().getStylesheets().add(getClass().getResource("/drum.css").toExternalForm());
+        var result = dialog.showAndWait();
+        if (result.isEmpty()) return null;
+        return result.get().equals("멜로디 악기") ? Beat.Instrument.MELODY : Beat.Instrument.DRUM;
+    }
 
-    private void addTrackFromFile(Path path, boolean askTrim) {
+    void addTrackFromFile(Path path) { addTrackFromFile(path, false, Beat.Instrument.DRUM); }
+
+    private void addTrackFromFile(Path path, boolean askTrim, Beat.Instrument instrument) {
         if (busy || recording || playing || tracks.size() >= Beat.MAX_TRACKS) return;
         String key = Sounds.nextFreeKey(tracks);
         var base = projectSnapshot();
-        importWithTrim(path, key, askTrim, imported -> {
+        importWithTrim(path, key, askTrim, instrument, tracks.size(), imported -> {
             setBusy(true, "새 트랙의 소리를 준비하는 중입니다…");
             io.submit(() -> {
                 try {
@@ -1161,7 +1275,9 @@ public final class DrumApp extends Application {
                         pushHistory(base, selectedTrack, selectedStep);
                         applyPrepared(prepared, true, currentFile, newTracks.size() - 1, () -> {
                             startLearning();
-                            status.setText("새 트랙을 추가했습니다 · 소리와 키를 확인하세요.");
+                            status.setText(instrument == Beat.Instrument.MELODY
+                                    ? "멜로디 악기를 추가했습니다 · 기준 음 C4(60)입니다."
+                                    : "새 트랙을 추가했습니다 · 소리와 키를 확인하세요.");
                         });
                     });
                 } catch (Exception e) {
@@ -1175,24 +1291,31 @@ public final class DrumApp extends Application {
         });
     }
 
-    /** Reads and decodes the sound, optionally shows the trim dialog, then returns a WAV track. */
-    private void importWithTrim(Path path, String key, boolean askTrim, Consumer<Beat.Track> done) {
+    /** Reads and decodes the sound, optionally shows the trim dialog, then returns a typed track. */
+    private void importWithTrim(Path path, String key, boolean askTrim,
+                                Beat.Instrument instrument, int trackIndex,
+                                Consumer<Beat.Track> done) {
         setBusy(true, "소리 파일을 읽는 중입니다…");
         io.submit(() -> {
             try {
                 var imported = Sounds.importFile(path, key);
+                var typed = instrument == Beat.Instrument.MELODY
+                        ? imported.withInstrument(Beat.Instrument.MELODY, 60)
+                                .withPitchMode(Beat.PitchMode.PITCH_SHIFT)
+                        : imported.withInstrument(Beat.Instrument.DRUM,
+                                MidiExporter.baseNote(imported.name(), trackIndex));
                 if (!askTrim) {
                     Platform.runLater(() -> {
                         setBusy(false, "");
-                        done.accept(imported);
+                        done.accept(typed);
                     });
                     return;
                 }
-                var pcm = Sounds.decode(imported);
+                var pcm = Sounds.decode(typed);
                 Platform.runLater(() -> {
                     if (closed) return;
                     setBusy(false, "");
-                    var trimmed = WaveformTrimDialog.show(stage, pcm, imported.name());
+                    var trimmed = WaveformTrimDialog.show(stage, pcm, typed.name());
                     if (trimmed == null) {
                         status.setText("소리 가져오기를 취소했습니다.");
                         return;
@@ -1200,7 +1323,7 @@ public final class DrumApp extends Application {
                     io.submit(() -> {
                         try {
                             byte[] wav = Sounds.wavBytes(trimmed);
-                            var result = new Beat.Track(imported.name(), key, "wav", wav, imported.pitch());
+                            var result = typed.withAudio(typed.name(), "wav", wav);
                             Platform.runLater(() -> done.accept(result));
                         } catch (Exception e) {
                             Platform.runLater(() -> {
@@ -1266,9 +1389,8 @@ public final class DrumApp extends Application {
         var base = projectSnapshot();
         int index = selectedTrack;
         var old = tracks.get(index);
-        importWithTrim(file.toPath(), old.key(), true, imported -> {
-            var replacement = new Beat.Track(imported.name(), old.key(), imported.format(),
-                    imported.audio(), old.pitch(), old.pitchMode());
+        importWithTrim(file.toPath(), old.key(), true, old.instrument(), index, imported -> {
+            var replacement = old.withAudio(imported.name(), imported.format(), imported.audio());
             setBusy(true, "소리를 바꾸는 중입니다…");
             io.submit(() -> {
                 try {
@@ -1429,7 +1551,7 @@ public final class DrumApp extends Application {
         io.submit(() -> {
             try {
                 switch (format) {
-                    case WAV -> WavExporter.export(target, project, gain, request.startBar(), request.endBar());
+                    case WAV -> WavExporter.export(target, project, gain, request.startBar(), request.endBar(), pitchCache);
                     case MIDI -> MidiExporter.export(target, project, request.startBar(), request.endBar());
                 }
                 long size = Files.size(target);
@@ -1494,12 +1616,14 @@ public final class DrumApp extends Application {
             var pitches = project.tracks().stream().map(Beat.Track::pitch).toList();
             var modes = project.tracks().stream()
                     .map(track -> track.pitchMode() == Beat.PitchMode.PITCH_SHIFT).toList();
-            engine.install(pcm, pitches, modes, project.hits(), project.length(), project.bpm());
+            var variants = pitchCache.prepare(project.tracks(), project.hits(), project.pitch(), pcm);
+            engine.install(pcm, pitches, modes, project.hits(), project.length(), project.bpm(),
+                    variants.tracks());
+            return new Prepared(project, engine, found, created, variants.missing());
         } catch (Exception e) {
             if (created) engine.close();
             throw e;
         }
-        return new Prepared(project, engine, found, created);
     }
 
     private void applyPrepared(Prepared prepared, boolean dirtyAfter, Path path, int select, Runnable after) {
@@ -1528,6 +1652,9 @@ public final class DrumApp extends Application {
         refreshUi();
         setBusy(false, "");
         if (after != null) after.run();
+        if (prepared.pitchMissing > 0) {
+            status.setText(status.getText() + " · 피치 " + prepared.pitchMissing + "개 준비 안 됨");
+        }
         updateTitle();
         audioDescription.setText(audio == null ? "WASAPI" : audio.description());
     }
@@ -1670,6 +1797,7 @@ public final class DrumApp extends Application {
         if (!message.isBlank()) status.setText(message);
         if (value) {
             if (loopSyncDelay != null) loopSyncDelay.stop();
+            if (pitchRefreshDelay != null) pitchRefreshDelay.stop();
         } else {
             syncControlState();
         }
@@ -1707,7 +1835,7 @@ public final class DrumApp extends Application {
     }
 
     private record Prepared(Beat.Project project, AudioEngine engine,
-                            List<AudioEngine.Device> devices, boolean created) {}
+                            List<AudioEngine.Device> devices, boolean created, int pitchMissing) {}
 
     private record History(Beat.Project project, int track, int step) {}
 
@@ -1715,6 +1843,8 @@ public final class DrumApp extends Application {
         closed = true;
         if (animation != null) animation.stop();
         if (loopSyncDelay != null) loopSyncDelay.stop();
+        if (pitchRefreshDelay != null) pitchRefreshDelay.stop();
+        if (pianoRoll != null) pianoRoll.close();
         if (audio != null) audio.close();
         io.shutdownNow();
     }
